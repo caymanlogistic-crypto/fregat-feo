@@ -33,6 +33,7 @@ try {
             f.cost,
             f.zayavki_ids,
             f.route_type,
+            f.legal_entity_code,
             f.unload_type,
             f.source_warehouse_id,
             f.destination_warehouse_id
@@ -52,4 +53,3 @@ try {
 } catch (Throwable $e) {
     echo json_encode(['success' => false, 'error' => 'Не удалось загрузить данные рейса'], JSON_UNESCAPED_UNICODE);
 }
-

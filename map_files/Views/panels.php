@@ -116,6 +116,19 @@ $t = static function (string $key, string $fallback): string {
                 <label class="flight-modal-label" for="edit_comment"><?= $t('route.field.comment', 'Комментарий / заголовок') ?></label>
                 <input class="flight-modal-input" type="text" id="edit_comment">
             </div>
+            <fieldset class="legal-entity-field" id="edit_legal_entity">
+                <legend class="flight-modal-label"><?= $t('route.field.legal_entity', 'Юридическое лицо *') ?></legend>
+                <div class="legal-entity-options">
+                    <label class="legal-entity-option">
+                        <input type="radio" name="edit_legal_entity_code" id="edit_legal_entity_planex" value="planex">
+                        <span>ООО «Планэкс»</span>
+                    </label>
+                    <label class="legal-entity-option">
+                        <input type="radio" name="edit_legal_entity_code" id="edit_legal_entity_mg_logistic" value="mg_logistic">
+                        <span>ООО «МГ Логистик»</span>
+                    </label>
+                </div>
+            </fieldset>
             <div>
                 <label class="flight-modal-label" for="edit_driver_id"><?= $t('route.field.driver', 'Водитель / машина') ?></label>
                 <div class="driver-input-row">
