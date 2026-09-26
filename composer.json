@@ -1,0 +1,14 @@
+{
+  "name": "caymanlogistic/fregat-feo-legacy",
+  "description": "Isolated local environment for the legacy FREGAT FEO system",
+  "license": "proprietary",
+  "type": "project",
+  "require": {
+    "php": "^8.4",
+    "phpoffice/phpspreadsheet": "^2.1"
+  },
+  "config": {
+    "sort-packages": true,
+    "allow-plugins": false
+  }
+}

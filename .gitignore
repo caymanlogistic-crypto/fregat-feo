@@ -1,0 +1,48 @@
+# Local configuration and secrets
+/.env
+/.env.*
+!/.env.example
+/config.php
+/include/config.php
+/glonass/config.php
+/map_files/config.php
+/map_files/config/max_notify.php
+/max/config_arrival.php
+/max/test/config_arrival.php
+
+# Database dumps and runtime data
+*.sql
+*.log
+*.gz
+*.bak
+*.backup
+*.tmp
+*.cache
+/db_report.txt
+/db_inspect.php
+/saved_data/
+/storage/
+/uploads/
+
+# Server deployment artefacts and duplicate staging copies
+/.deploy_backups/
+/.feo-coordinate-backups-*/
+/map_test/
+/map_files/assets/OLD maptest.js
+/docs2/xls/Копия sample.xlsx
+/docs2/xls/sample — копия.xlsx
+
+# Linked task worktrees (one branch/worktree per task)
+/.worktrees/
+
+# Generated dependencies
+/vendor/
+**/venv/
+**/__pycache__/
+*.pyc
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

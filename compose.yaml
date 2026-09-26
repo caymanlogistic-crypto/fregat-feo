@@ -1,0 +1,61 @@
+name: fregat-feo
+
+services:
+  web:
+    build:
+      context: .
+    ports:
+      - "${APP_PORT:-8080}:80"
+    environment:
+      APP_ENV: ${APP_ENV:-local}
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_NAME: ${DB_NAME:-spugovxsim_frega}
+      DB_USER: ${DB_USER:-feo}
+      DB_PASS: ${DB_PASS:-change_me}
+      DB_CHARSET: ${DB_CHARSET:-utf8mb4}
+      YANDEX_MAPS_API_KEY: ${YANDEX_MAPS_API_KEY:-}
+      SLITEX_BASE_URL: ${SLITEX_BASE_URL:-https://slitex.online}
+      SLITEX_API_TOKEN: ${SLITEX_API_TOKEN:-}
+      DADATA_API_TOKEN: ${DADATA_API_TOKEN:-}
+      GLONASS_API_BASE_URL: ${GLONASS_API_BASE_URL:-https://fm2.delta.ru}
+      GLONASS_API_LOGIN: ${GLONASS_API_LOGIN:-}
+      GLONASS_API_PASSWORD: ${GLONASS_API_PASSWORD:-}
+      GLONASS_API_TOKEN: ${GLONASS_API_TOKEN:-}
+      GLONASS_TRACKER_IDS: ${GLONASS_TRACKER_IDS:-}
+      MAX_NOTIFY_KEY: ${MAX_NOTIFY_KEY:-}
+      MAX_API_BASE_URL: ${MAX_API_BASE_URL:-https://platform-api.max.ru}
+      MAX_API_TOKEN: ${MAX_API_TOKEN:-}
+      MAX_CHAT_ID: ${MAX_CHAT_ID:-}
+      MAX_ADMIN_PASSWORD: ${MAX_ADMIN_PASSWORD:-}
+      DIAGNOSTIC_ACCESS_KEY: ${DIAGNOSTIC_ACCESS_KEY:-}
+      MAPPING_DIAGNOSTIC_KEY: ${MAPPING_DIAGNOSTIC_KEY:-}
+    volumes:
+      - .:/var/www/html/fregat/feo
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    image: mysql:5.7
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --max-allowed-packet=256M
+    environment:
+      MYSQL_DATABASE: ${DB_NAME:-spugovxsim_frega}
+      MYSQL_USER: ${DB_USER:-feo}
+      MYSQL_PASSWORD: ${DB_PASS:-change_me}
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASS:-change_root_me}
+    volumes:
+      - feo_mysql_data:/var/lib/mysql
+      - "${FEO_SQL_DUMP}:/docker-entrypoint-initdb.d/001-frega.sql:ro"
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 40
+      start_period: 30s
+
+volumes:
+  feo_mysql_data:
