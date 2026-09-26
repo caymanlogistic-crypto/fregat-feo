@@ -32,6 +32,8 @@ git worktree add ".worktrees/$TaskId" -b "codex/$TaskId" main
 - Для завершённой задачи сначала объедините проверенный commit, затем удалите linked worktree командой `git worktree remove .worktrees/<TASK_ID>`.
 - Для реально одновременных runtime-задач нужны отдельные Compose project, port, DB и volume; это настраивается только отдельной командой OWNER.
 
+Полный порядок начала задачи, безопасные рабочие файлы и pre-commit проверка описаны в [`docs/LOCAL_DEVELOPMENT.md`](docs/LOCAL_DEVELOPMENT.md).
+
 ## Безопасность
 
 В Git запрещено добавлять `.env`, `config.php`, SQL-дампы, логи, серверные архивы, `venv` и `map_test`. Внешние API отключены, пока соответствующий токен явно не задан в `.env`.
@@ -42,4 +44,10 @@ git worktree add ".worktrees/$TaskId" -b "codex/$TaskId" main
 Get-ChildItem -Recurse -Filter *.php | ForEach-Object { php -l $_.FullName }
 docker compose config
 docker compose ps
+```
+
+Единая read-only проверка уже работающей локальной среды:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools/verify-local.ps1
 ```
