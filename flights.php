@@ -16,7 +16,7 @@ const FLIGHT_LEGAL_ENTITIES = [
     'planex' => 'ООО «Планэкс»',
     'mg_logistic' => 'ООО «МГ Логистик»',
 ];
-const LEGACY_FLIGHT_MAX_ID = 244;
+const LEGACY_FLIGHT_CUTOFF_ID = 244;
 
 function normalizeFlightLegalEntity($value) {
     $code = strtolower(trim((string)$value));
@@ -932,7 +932,7 @@ style="width: 100%;"
 <h2>Список рейсов</h2>
 <label class="legacy-flights-toggle">
 <input type="checkbox" id="showLegacyFlights" aria-controls="flightsTable">
-Показать старые рейсы (ID ≤ <?= LEGACY_FLIGHT_MAX_ID ?>)
+Показать старые рейсы (ID &lt; <?= LEGACY_FLIGHT_CUTOFF_ID ?>)
 </label>
 </div>
 <div class="table-wrapper">
@@ -958,7 +958,7 @@ style="width: 100%;"
 </thead>
 <tbody>
 <?php foreach ($flights as $flight): ?>
-<?php $isLegacyFlight = (int)$flight['id'] <= LEGACY_FLIGHT_MAX_ID; ?>
+<?php $isLegacyFlight = (int)$flight['id'] < LEGACY_FLIGHT_CUTOFF_ID; ?>
 <tr class="group-header<?= $isLegacyFlight ? ' legacy-flight-row' : '' ?>" data-flight-id="<?= (int)$flight['id'] ?>" onclick="toggleFlight('details_<?= $flight['id'] ?>', event)">
 <td style="text-align: center;">▶</td>
 <td><strong>#<?= $flight['id'] ?></strong></td>
