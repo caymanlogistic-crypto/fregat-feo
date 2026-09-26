@@ -31,6 +31,17 @@ function flightLegalEntityLabel($code) {
     return FLIGHT_LEGAL_ENTITIES[$normalized] ?? 'Не указано';
 }
 
+function flightLegalEntityCssClass($code) {
+    $normalized = strtolower(trim((string)$code));
+    if ($normalized === 'planex') {
+        return 'legal-entity-name legal-entity-planex';
+    }
+    if ($normalized === 'mg_logistic') {
+        return 'legal-entity-name legal-entity-mg-logistic';
+    }
+    return 'legal-entity-name legal-entity-missing';
+}
+
 // Подключение к БД
 try {
 $pdo = new PDO(
@@ -695,6 +706,18 @@ cursor: pointer;
 color: #b42318;
 font-weight: 600;
 }
+.legal-entity-name {
+font-weight: 700;
+}
+.legal-entity-options label.legal-entity-name {
+font-weight: 700;
+}
+.legal-entity-planex {
+color: #28a745;
+}
+.legal-entity-mg-logistic {
+color: #9c27b0;
+}
 .flights-list-header {
 display: flex;
 align-items: center;
@@ -819,8 +842,8 @@ required
 <fieldset class="form-group legal-entity-field">
 <legend>Юридическое лицо рейса *</legend>
 <div class="legal-entity-options">
-<label><input type="radio" name="legal_entity_code" value="planex" required> ООО «Планэкс»</label>
-<label><input type="radio" name="legal_entity_code" value="mg_logistic" required> ООО «МГ Логистик»</label>
+<label class="legal-entity-name legal-entity-planex"><input type="radio" name="legal_entity_code" value="planex" required> ООО «Планэкс»</label>
+<label class="legal-entity-name legal-entity-mg-logistic"><input type="radio" name="legal_entity_code" value="mg_logistic" required> ООО «МГ Логистик»</label>
 </div>
 </fieldset>
 <div class="form-group">
@@ -964,7 +987,7 @@ style="width: 100%;"
 <td><strong>#<?= $flight['id'] ?></strong></td>
 <td>
 <?= !empty($flight['comment']) ? htmlspecialchars($flight['comment']) : '<span style="color:#999;">—</span>' ?>
-<br><small class="<?= empty($flight['legal_entity_code']) ? 'legal-entity-missing' : '' ?>">
+<br><small class="<?= htmlspecialchars(flightLegalEntityCssClass($flight['legal_entity_code'] ?? '')) ?>">
 <?= htmlspecialchars(flightLegalEntityLabel($flight['legal_entity_code'] ?? '')) ?>
 </small>
 </td>
@@ -1481,8 +1504,8 @@ ${flight.status === '<?= $s['статус'] ?>' ? 'selected' : ''}>
 <fieldset class="form-group legal-entity-field">
 <legend>Юридическое лицо рейса *</legend>
 <div class="legal-entity-options">
-<label><input type="radio" name="legal_entity_code" value="planex" required ${flight.legal_entity_code === 'planex' ? 'checked' : ''}> ООО «Планэкс»</label>
-<label><input type="radio" name="legal_entity_code" value="mg_logistic" required ${flight.legal_entity_code === 'mg_logistic' ? 'checked' : ''}> ООО «МГ Логистик»</label>
+<label class="legal-entity-name legal-entity-planex"><input type="radio" name="legal_entity_code" value="planex" required ${flight.legal_entity_code === 'planex' ? 'checked' : ''}> ООО «Планэкс»</label>
+<label class="legal-entity-name legal-entity-mg-logistic"><input type="radio" name="legal_entity_code" value="mg_logistic" required ${flight.legal_entity_code === 'mg_logistic' ? 'checked' : ''}> ООО «МГ Логистик»</label>
 </div>
 ${flight.legal_entity_code ? '' : '<div class="legal-entity-missing" style="margin-top:8px;">Для старого рейса юридическое лицо ещё не указано. Выберите его перед сохранением.</div>'}
 </fieldset>
