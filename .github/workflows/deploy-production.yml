@@ -1,0 +1,52 @@
+name: Deploy LEGACY FREGAT FEO
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: fregat-feo-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy changed runtime files
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure dedicated deploy SSH key
+        shell: bash
+        env:
+          DEPLOY_KEY: ${{ secrets.FREGAT_DEPLOY_KEY }}
+          KNOWN_HOSTS: ${{ secrets.FREGAT_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$DEPLOY_KEY" > "$HOME/.ssh/fregat_deploy"
+          chmod 600 "$HOME/.ssh/fregat_deploy"
+          printf '%s\n' "$KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Deploy exact changed-file candidate
+        shell: bash
+        env:
+          FREGAT_DEPLOY_HOST: ${{ secrets.FREGAT_DEPLOY_HOST }}
+          FREGAT_DEPLOY_PORT: ${{ secrets.FREGAT_DEPLOY_PORT }}
+          FREGAT_DEPLOY_USER: ${{ secrets.FREGAT_DEPLOY_USER }}
+          FREGAT_DEPLOY_KEY_FILE: /home/runner/.ssh/fregat_deploy
+        run: bash .github/scripts/deploy-production.sh
+
+      - name: Verify production HTTP
+        shell: bash
+        run: curl --fail --silent --show-error --max-time 20 --output /dev/null http://spugovxsim.temp.swtest.ru/fregat/feo/maptest.php

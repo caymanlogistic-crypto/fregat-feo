@@ -1014,6 +1014,10 @@ New rule: One server command at a time; block when sessions are overloaded.
 
 # AUTODEPLOY WAIT / VERIFY RULE
 
+The canonical autodeploy implementation is `.github/workflows/deploy-production.yml` in the private repository `caymanlogistic-crypto/fregat-feo`. Before relying on autodeploy, ROO/Codex must verify that the workflow exists, that a GitHub Actions run was created for the exact pushed SHA, and that the run completed successfully. Waiting for files without checking the Actions run is not valid deploy verification.
+
+Autodeploy copies changed runtime files only. It never runs database migrations, never deploys `map2.php`, never deploys configuration/secrets/dumps, and never deletes production files. Database migrations remain a separate explicitly authorized production action after the migration file has been delivered and verified.
+
 After ROO/Codex performs a local `git push origin main`, it MUST NOT immediately report the task as completed.
 
 The project uses GitHub/autodeploy to deliver files to the server folder:
