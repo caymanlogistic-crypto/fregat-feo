@@ -1258,7 +1258,7 @@ function clearFlightValidationErrors() {
         wrap.style.display = 'none';
         wrap.innerHTML = '';
     }
-    ['edit_comment', 'edit_driver_id', 'edit_planned_start_date_from', 'edit_planned_start_date_to', 'edit_actual_start_date', 'edit_actual_end_date', 'edit_cost', 'edit_zayavki_ids', 'edit_route_type', 'edit_source_warehouse_id', 'edit_destination_warehouse_id']
+    ['edit_comment', 'edit_driver_id', 'edit_planned_start_date_from', 'edit_planned_start_date_to', 'edit_actual_start_date', 'edit_actual_end_date', 'edit_cost', 'edit_zayavki_ids', 'edit_route_type', 'edit_source_warehouse_id', 'edit_destination_warehouse_id', 'edit_legal_entity']
         .forEach((id) => {
             const el = document.getElementById(id);
             if (el) el.classList.remove('field-error');
@@ -1274,9 +1274,10 @@ function clearFlightValidationErrors() {
 
 function showFlightValidationErrors(errorMap, headerText = UI.msgTransitionValidationHeader) {
     const wrap = document.getElementById('flightValidationErrors');
-    const orderedFields = ['comment', 'driver_id', 'planned_start_date_from', 'planned_start_date_to', 'actual_start_date', 'actual_end_date', 'cost', 'zayavki_ids', 'route_type', 'source_warehouse_id', 'destination_warehouse_id'];
+    const orderedFields = ['comment', 'legal_entity_code', 'driver_id', 'planned_start_date_from', 'planned_start_date_to', 'actual_start_date', 'actual_end_date', 'cost', 'zayavki_ids', 'route_type', 'source_warehouse_id', 'destination_warehouse_id'];
     const fieldToInput = {
         comment: 'edit_comment',
+        legal_entity_code: 'edit_legal_entity',
         driver_id: 'edit_driver_input',
         planned_start_date_from: 'edit_planned_start_date_from',
         planned_start_date_to: 'edit_planned_start_date_to',
@@ -1290,6 +1291,7 @@ function showFlightValidationErrors(errorMap, headerText = UI.msgTransitionValid
     };
     const fieldLabels = {
         comment: UI.msgTransitionValidationTitle,
+        legal_entity_code: 'Юридическое лицо',
         driver_id: UI.msgTransitionValidationDriver,
         planned_start_date_from: UI.msgTransitionValidationDates,
         planned_start_date_to: UI.msgTransitionValidationDates,
@@ -1350,6 +1352,7 @@ function validateRequiredForStrictTransition() {
         .filter(v => /^\d+$/.test(v));
 
     if (!driverId) errors.driver_id = true;
+    if (!document.querySelector('input[name="edit_legal_entity_code"]:checked')) errors.legal_entity_code = true;
     if (!fromVal) errors.planned_start_date_from = true;
     if (!costVal) errors.cost = true;
     if (ids.length === 0) errors.zayavki_ids = true;
@@ -2020,6 +2023,9 @@ async function openFlightEditModal(routeId, source) {
     if (zayavkiInput) zayavkiInput.value = String(meta.zayavki_ids || '');
     const initialRouteType = normalizeRouteType(meta.route_type || '', meta.unload_type || 'OO');
     if (routeTypeInput) routeTypeInput.value = initialRouteType;
+    document.querySelectorAll('input[name="edit_legal_entity_code"]').forEach((input) => {
+        input.checked = input.value === String(meta.legal_entity_code || '');
+    });
     await Promise.allSettled([loadDriversCatalog(), loadWarehouses(true)]);
     if (sourceWarehouseInput) {
         sourceWarehouseInput.innerHTML = buildWarehouseOptions(meta.source_warehouse_id, 'Выберите склад отправления');
@@ -2136,7 +2142,9 @@ function setFlightEditReadOnlyMode(isReadOnly) {
         'edit_zayavki_ids',
         'edit_route_type',
         'edit_source_warehouse_id',
-        'edit_destination_warehouse_id'
+        'edit_destination_warehouse_id',
+        'edit_legal_entity_planex',
+        'edit_legal_entity_mg_logistic'
     ];
     fieldIds.forEach((id) => {
         const el = document.getElementById(id);
@@ -2408,6 +2416,7 @@ function collectFlightEditPayload() {
     const routeTypeInput = document.getElementById('edit_route_type');
     const sourceWarehouseInput = document.getElementById('edit_source_warehouse_id');
     const destinationWarehouseInput = document.getElementById('edit_destination_warehouse_id');
+    const legalEntityInput = document.querySelector('input[name="edit_legal_entity_code"]:checked');
     const flightId = Number(idInput ? idInput.value : 0);
     const routeType = normalizeRouteType(routeTypeInput ? routeTypeInput.value : (currentEditingMeta?.route_type || ''), currentEditingMeta?.unload_type || 'OO');
     return {
@@ -2422,6 +2431,7 @@ function collectFlightEditPayload() {
         zayavki_ids: zayavkiInput ? zayavkiInput.value : '',
         unload_type: resolveUnloadTypeByRouteType(routeType),
         route_type: routeType,
+        legal_entity_code: legalEntityInput ? legalEntityInput.value : '',
         source_warehouse_id: sourceWarehouseInput ? sourceWarehouseInput.value : '',
         destination_warehouse_id: destinationWarehouseInput ? destinationWarehouseInput.value : ''
     };
@@ -2461,6 +2471,9 @@ async function saveFlightEdit(options = {}) {
         }
     }
     const saveErrors = isStrictEdit ? validateRequiredForStrictTransition() : {};
+    if (!document.querySelector('input[name="edit_legal_entity_code"]:checked')) {
+        saveErrors.legal_entity_code = true;
+    }
     if (Object.keys(saveErrors).length > 0) {
         showFlightValidationErrors(saveErrors, UI.msgSaveValidationTitle);
         return false;
@@ -2528,6 +2541,8 @@ function hasUnsavedFlightEditChanges() {
     const curRt = normalizeRouteType(routeTypeInput?.value || '', currentEditingMeta.unload_type || 'OO');
     const metaRt = normalizeRouteType(currentEditingMeta.route_type || '', currentEditingMeta.unload_type || 'OO');
     if (curRt !== metaRt) return true;
+    const legalEntityInput = document.querySelector('input[name="edit_legal_entity_code"]:checked');
+    if (String(legalEntityInput?.value || '') !== String(currentEditingMeta.legal_entity_code || '')) return true;
     const srcWh = document.getElementById('edit_source_warehouse_id');
     const dstWh = document.getElementById('edit_destination_warehouse_id');
     if (Number(srcWh?.value || 0) !== Number(currentEditingMeta.source_warehouse_id || 0)) return true;
@@ -2598,6 +2613,7 @@ async function transferPlannedToFound(routeId) {
             name: payload.comment || resolveRouteTitle(meta) || '',
             unload_type: payload.unload_type || resolveUnloadTypeByRouteType(payload.route_type || meta.route_type || ''),
             route_type: payload.route_type || meta.route_type || '',
+            legal_entity_code: payload.legal_entity_code || meta.legal_entity_code || '',
             source_warehouse_id: payload.source_warehouse_id || meta.source_warehouse_id || '',
             destination_warehouse_id: payload.destination_warehouse_id || meta.destination_warehouse_id || ''
         });
@@ -3014,6 +3030,19 @@ function ensureCreateRouteModal() {
         <select class="flight-modal-input" id="create_route_manager_id">
             <option value="">\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u043c\u0435\u043d\u0435\u0434\u0436\u0435\u0440\u0430</option>
         </select>
+        <fieldset class="legal-entity-field" id="create_legal_entity">
+            <legend class="flight-modal-label">\u042e\u0440\u0438\u0434\u0438\u0447\u0435\u0441\u043a\u043e\u0435 \u043b\u0438\u0446\u043e *</legend>
+            <div class="legal-entity-options">
+                <label class="legal-entity-option">
+                    <input type="radio" name="create_legal_entity_code" value="planex">
+                    <span>\u041e\u041e\u041e \u00ab\u041f\u043b\u0430\u043d\u044d\u043a\u0441\u00bb</span>
+                </label>
+                <label class="legal-entity-option">
+                    <input type="radio" name="create_legal_entity_code" value="mg_logistic">
+                    <span>\u041e\u041e\u041e \u00ab\u041c\u0413 \u041b\u043e\u0433\u0438\u0441\u0442\u0438\u043a\u00bb</span>
+                </label>
+            </div>
+        </fieldset>
         <label class="flight-modal-label" for="create_route_type">\u0422\u0438\u043f \u0440\u0435\u0439\u0441\u0430</label>
         <select class="flight-modal-input" id="create_route_type">
             <option value="generator_to_utilizer">\u041e\u0431\u044b\u0447\u043d\u0430\u044f \u0432\u044b\u0433\u0440\u0443\u0437\u043a\u0430 / \u0423\u0442\u0438\u043b\u0438\u0437\u0430\u0442\u043e\u0440</option>
@@ -3195,6 +3224,8 @@ function openCreateRouteModal() {
     const nameInput = document.getElementById('create_route_name');
     const errors = document.getElementById('createRouteErrors');
     if (nameInput) nameInput.value = '';
+    document.querySelectorAll('input[name="create_legal_entity_code"]').forEach((input) => { input.checked = false; });
+    document.getElementById('create_legal_entity')?.classList.remove('field-error');
     if (errors) {
         errors.style.display = 'none';
         errors.innerHTML = '';
@@ -3258,6 +3289,7 @@ function confirmCreateRoute() {
     const routeTypeInput = document.getElementById('create_route_type');
     const sourceWarehouseInput = document.getElementById('create_source_warehouse_id');
     const destinationWarehouseInput = document.getElementById('create_destination_warehouse_id');
+    const legalEntityInput = document.querySelector('input[name="create_legal_entity_code"]:checked');
     const errorBox = document.getElementById('createRouteErrors');
     const saveBtn = document.getElementById('saveRouteBtn');
 
@@ -3287,6 +3319,14 @@ function confirmCreateRoute() {
         if (managerInput) managerInput.focus();
         return;
     }
+    if (!legalEntityInput) {
+        if (errorBox) {
+            errorBox.style.display = 'block';
+            errorBox.textContent = '\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u044e\u0440\u0438\u0434\u0438\u0447\u0435\u0441\u043a\u043e\u0435 \u043b\u0438\u0446\u043e \u0440\u0435\u0439\u0441\u0430';
+        }
+        document.getElementById('create_legal_entity')?.classList.add('field-error');
+        return;
+    }
     if (routeType === 'generator_to_warehouse' && !destinationWarehouseId) {
         if (errorBox) {
             errorBox.style.display = 'block';
@@ -3303,6 +3343,7 @@ function confirmCreateRoute() {
         cost: (costVal !== '' && !isNaN(costVal)) ? parseFloat(costVal) : null,
         unload_type: resolveUnloadTypeByRouteType(routeType),
         route_type: routeType,
+        legal_entity_code: legalEntityInput.value,
         source_warehouse_id: sourceWarehouseId,
         destination_warehouse_id: destinationWarehouseId
     };
@@ -3328,6 +3369,7 @@ function promptSaveRoute() {
         const normalizedRouteType = normalizeRouteType(existingRouteType, existingUnloadType);
         const existingDriverId = cachedMeta.driver_id || '';
         const existingAssignedManagerId = cachedMeta.assigned_manager_id || '';
+        const existingLegalEntityCode = cachedMeta.legal_entity_code || '';
         const existingCost = cachedMeta.cost ?? '';
         const existingDatesFrom = cachedMeta.planned_start_date_from || '';
         const existingDatesTo = cachedMeta.planned_start_date_to || '';
@@ -3337,6 +3379,7 @@ function promptSaveRoute() {
             zayavki_ids: selectedOrder.join(','),
             driver_id: existingDriverId,
             assigned_manager_id: existingAssignedManagerId,
+            legal_entity_code: existingLegalEntityCode,
             cost: (costVal !== '' && !isNaN(costVal)) ? parseFloat(costVal) : (existingCost !== '' ? existingCost : null),
             planned_start_date_from: existingDatesFrom,
             planned_start_date_to: existingDatesTo,
@@ -3505,6 +3548,17 @@ function init() {
             if (event.target === createRouteModal) closeCreateRouteModal();
         });
     }
+    document.querySelectorAll('input[name="create_legal_entity_code"]').forEach((input) => {
+        input.addEventListener('change', () => {
+            document.getElementById('create_legal_entity')?.classList.remove('field-error');
+        });
+    });
+    document.querySelectorAll('input[name="edit_legal_entity_code"]').forEach((input) => {
+        input.addEventListener('change', () => {
+            document.getElementById('edit_legal_entity')?.classList.remove('field-error');
+            updateFlightModalSummary();
+        });
+    });
     const addSourceWarehouseBtn = document.getElementById('add_source_warehouse_btn');
     const addDestinationWarehouseBtn = document.getElementById('add_destination_warehouse_btn');
     const addDriverBtn = document.getElementById('add_driver_btn');

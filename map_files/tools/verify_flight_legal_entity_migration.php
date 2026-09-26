@@ -37,8 +37,8 @@ echo 'SELECT flights_column: ' . json_encode($column, JSON_UNESCAPED_UNICODE | J
 $statsStmt = $pdo->query(<<<'SQL'
 SELECT
     COUNT(*) AS total_flights,
-    SUM(legal_entity_code IS NULL OR legal_entity_code = '') AS without_legal_entity,
-    SUM(legal_entity_code NOT IN ('planex', 'mg_logistic')) AS invalid_legal_entity
+    COALESCE(SUM(legal_entity_code IS NULL OR legal_entity_code = ''), 0) AS without_legal_entity,
+    COALESCE(SUM(legal_entity_code NOT IN ('planex', 'mg_logistic')), 0) AS invalid_legal_entity
 FROM flights
 SQL);
 $stats = $statsStmt ? $statsStmt->fetch(PDO::FETCH_ASSOC) : false;

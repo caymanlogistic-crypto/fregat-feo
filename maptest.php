@@ -103,6 +103,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_GET['action']) && strpos((s
                 exit;
             }
 
+            if (!in_array((string)($flight['legal_entity_code'] ?? ''), ['planex', 'mg_logistic'], true)) {
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'Выберите юридическое лицо рейса',
+                    'errors' => ['legal_entity_code' => 'Выберите юридическое лицо рейса'],
+                ], JSON_UNESCAPED_UNICODE);
+                exit;
+            }
+
             $ok = $flightRepository->updateFlightStatus($flightId, 'found');
             $response = [
                 'success' => $ok,
@@ -277,6 +286,7 @@ try {
                 planned_start_date_to,
                 unload_type,
                 route_type,
+                legal_entity_code,
                 source_warehouse_id,
                 destination_warehouse_id
             FROM flights
@@ -529,6 +539,7 @@ try {
             'status' => $status,
             'unload_type' => (string)($flight['unload_type'] ?? 'OO'),
             'route_type' => (string)($flight['route_type'] ?? ''),
+            'legal_entity_code' => (string)($flight['legal_entity_code'] ?? ''),
             'source_warehouse_id' => (int)($flight['source_warehouse_id'] ?? 0),
             'destination_warehouse_id' => (int)($flight['destination_warehouse_id'] ?? 0),
         ];

@@ -13,6 +13,8 @@ const STATUS_PLANNED = 'planned_route';
 const STATUS_FOUND = 'found';
 const STATUS_STARTED = 'started';
 const STATUS_COMPLETED = 'completed';
+const LEGAL_ENTITY_PLANEX = 'planex';
+const LEGAL_ENTITY_MG_LOGISTIC = 'mg_logistic';
 // ROUTE_TYPE_* constants are inherited from warehouse_movements.php (required on line 6)
 
 function jsonOut(array $payload): void
@@ -142,7 +144,7 @@ function loadFlightSnapshot(PDO $pdo, $flightId): ?array
 {
     try {
         $managerColumn = resolveFlightsManagerColumn($pdo) ?? 'assigned_manager_id';
-        $sql = 'SELECT id, status, driver_id, zayavki_ids, planned_start_date_from, planned_start_date_to, actual_start_date, actual_end_date, comment, cost, unload_type, route_type, source_warehouse_id, destination_warehouse_id, '
+        $sql = 'SELECT id, status, driver_id, zayavki_ids, planned_start_date_from, planned_start_date_to, actual_start_date, actual_end_date, comment, cost, unload_type, route_type, legal_entity_code, source_warehouse_id, destination_warehouse_id, '
             . quoteIdent($managerColumn) . ' AS assigned_manager_id FROM flights WHERE id = ? LIMIT 1';
         $stmt = $pdo->prepare($sql);
         if (!$stmt || !$stmt->execute([(int)$flightId])) {
@@ -261,7 +263,8 @@ function validateRouteData(
     bool $requireFullForFoundTransition,
     bool $requireTitle = false,
     ?bool $requireRequests = null,
-    ?bool $requireWarehouses = null
+    ?bool $requireWarehouses = null,
+    bool $requireLegalEntity = false
 ): array
 {
     if ($requireRequests === null) {
@@ -309,6 +312,14 @@ function validateRouteData(
     $unloadType = resolveUnloadTypeByRouteType($routeType);
     $sourceWarehouseId = normalizeWarehouseId($pdo, $data['source_warehouse_id'] ?? null);
     $destinationWarehouseId = normalizeWarehouseId($pdo, $data['destination_warehouse_id'] ?? null);
+    $legalEntityCode = strtolower(trim((string)($data['legal_entity_code'] ?? '')));
+    $allowedLegalEntities = [LEGAL_ENTITY_PLANEX, LEGAL_ENTITY_MG_LOGISTIC];
+    if ($legalEntityCode !== '' && !in_array($legalEntityCode, $allowedLegalEntities, true)) {
+        return [false, 'Некорректное юридическое лицо', [], ['legal_entity_code' => 'Выберите юридическое лицо из списка']];
+    }
+    if ($requireLegalEntity && $legalEntityCode === '') {
+        return [false, 'Выберите юридическое лицо рейса', [], ['legal_entity_code' => 'Выберите юридическое лицо рейса']];
+    }
 
     if ($requireWarehouses && $routeType === ROUTE_TYPE_GENERATOR_TO_WAREHOUSE && $destinationWarehouseId === null) {
         return [false, 'Укажите склад назначения', [], ['destination_warehouse_id' => 'Укажите склад назначения']];
@@ -378,6 +389,7 @@ function validateRouteData(
         'cost' => $cost,
         'unload_type' => $unloadType,
         'route_type' => $routeType,
+        'legal_entity_code' => $legalEntityCode !== '' ? $legalEntityCode : null,
         'source_warehouse_id' => $sourceWarehouseId,
         'destination_warehouse_id' => $destinationWarehouseId,
     ], []];
@@ -407,6 +419,19 @@ function formatMoneyRu($value): string
     if ($value === null || $value === '') return '0 ₽';
     $num = (float)$value;
     return number_format($num, 0, '.', ' ') . ' ₽';
+}
+
+function legalEntityLabel($code): string
+{
+    $normalized = strtolower(trim((string)$code));
+    if ($normalized === LEGAL_ENTITY_PLANEX) return 'ООО «Планэкс»';
+    if ($normalized === LEGAL_ENTITY_MG_LOGISTIC) return 'ООО «МГ Логистик»';
+    return 'не указано';
+}
+
+function buildLegalEntityLine(array $route): string
+{
+    return 'Юридическое лицо: ' . legalEntityLabel($route['legal_entity_code'] ?? '');
 }
 
 function formatKgFromTons($tons): string
@@ -712,6 +737,7 @@ function buildRouteDiffContext(PDO $pdo, array $before, array $after, int $fligh
     if ((string)($before['cost'] ?? '') !== (string)($after['cost'] ?? '')) $changedFields[] = 'cost';
     if ((string)($before['zayavki_ids'] ?? '') !== (string)($after['zayavki_ids'] ?? '')) $changedFields[] = 'requests';
     if ((string)($before['route_type'] ?? '') !== (string)($after['route_type'] ?? '')) $changedFields[] = 'route_type';
+    if ((string)($before['legal_entity_code'] ?? '') !== (string)($after['legal_entity_code'] ?? '')) $changedFields[] = 'legal_entity';
     if ((string)($before['source_warehouse_id'] ?? '') !== (string)($after['source_warehouse_id'] ?? '')) $changedFields[] = 'source_warehouse';
     if ((string)($before['destination_warehouse_id'] ?? '') !== (string)($after['destination_warehouse_id'] ?? '')) $changedFields[] = 'destination_warehouse';
     if (trim((string)($before['comment'] ?? '')) !== trim((string)($after['comment'] ?? ''))) $changedFields[] = 'route_title';
@@ -740,6 +766,8 @@ function buildRouteDiffContext(PDO $pdo, array $before, array $after, int $fligh
         'requests_removed' => implode(',', $removed),
         'route_type_old' => (string)($before['route_type'] ?? ''),
         'route_type_new' => (string)($after['route_type'] ?? ''),
+        'legal_entity_old' => legalEntityLabel($before['legal_entity_code'] ?? ''),
+        'legal_entity_new' => legalEntityLabel($after['legal_entity_code'] ?? ''),
         'source_warehouse_old' => (string)($before['source_warehouse_id'] ?? ''),
         'source_warehouse_new' => (string)($after['source_warehouse_id'] ?? ''),
         'destination_warehouse_old' => (string)($before['destination_warehouse_id'] ?? ''),
@@ -765,6 +793,9 @@ function buildRouteEventContext(PDO $pdo, array $route, int $flightId, array $ex
         'responsible' => $manager !== '' ? $manager : 'не назначен',
         'route_type' => (string)$routeType,
         'route_type_line' => $routeTypeLine,
+        'legal_entity_code' => (string)($route['legal_entity_code'] ?? ''),
+        'legal_entity' => legalEntityLabel($route['legal_entity_code'] ?? ''),
+        'legal_entity_line' => buildLegalEntityLine($route),
         'unload_target_line' => $unloadTarget,
         'meta_line' => (trim(buildCompactMetaLine($route)) !== '' ? trim(buildCompactMetaLine($route)) : 'Параметры рейса: не заданы'),
         'requests_count' => (string)((int)($route['_count'] ?? 0)),
@@ -858,6 +889,7 @@ function buildPlannedToFoundMessage(PDO $pdo, array $after, int $flightId): stri
     if ($routeTypeLine !== '') {
         $lines[] = $routeTypeLine;
     }
+    $lines[] = buildLegalEntityLine($after);
     $lines[] = $meta;
     $lines[] = $driver;
     $lines[] = "Рейс закреплен: {$manager}";
@@ -903,6 +935,9 @@ function buildFoundDiffMessage(PDO $pdo, array $before, array $after, int $fligh
     }
     if ((string)($before['route_type'] ?? '') !== (string)($after['route_type'] ?? '')) {
         $blocks[] = "Маршрут груза:\nБыло: " . buildRouteTypeLabel($before) . "\nСтало: " . buildRouteTypeLabel($after);
+    }
+    if ((string)($before['legal_entity_code'] ?? '') !== (string)($after['legal_entity_code'] ?? '')) {
+        $blocks[] = "Юридическое лицо:\nБыло: " . legalEntityLabel($before['legal_entity_code'] ?? '') . "\nСтало: " . legalEntityLabel($after['legal_entity_code'] ?? '');
     }
     if ((int)($before['source_warehouse_id'] ?? 0) !== (int)($after['source_warehouse_id'] ?? 0)) {
         $oldName = getWarehouseNameById($pdo, $before['source_warehouse_id'] ?? 0);
@@ -971,6 +1006,9 @@ function buildStartedDiffMessage(PDO $pdo, array $before, array $after, int $fli
     if ((string)($before['route_type'] ?? '') !== (string)($after['route_type'] ?? '')) {
         $blocks[] = "Маршрут груза:\nБыло: " . buildRouteTypeLabel($before) . "\nСтало: " . buildRouteTypeLabel($after);
     }
+    if ((string)($before['legal_entity_code'] ?? '') !== (string)($after['legal_entity_code'] ?? '')) {
+        $blocks[] = "Юридическое лицо:\nБыло: " . legalEntityLabel($before['legal_entity_code'] ?? '') . "\nСтало: " . legalEntityLabel($after['legal_entity_code'] ?? '');
+    }
     if ((int)($before['source_warehouse_id'] ?? 0) !== (int)($after['source_warehouse_id'] ?? 0)) {
         $oldName = getWarehouseNameById($pdo, $before['source_warehouse_id'] ?? 0);
         $newName = getWarehouseNameById($pdo, $after['source_warehouse_id'] ?? 0);
@@ -1028,6 +1066,7 @@ try {
                     'driver_id', 'assigned_manager_id', 'cost',
                     'planned_start_date_from', 'planned_start_date_to',
                     'route_type', 'unload_type',
+                    'legal_entity_code',
                     'source_warehouse_id', 'destination_warehouse_id',
                     'comment',
                 ];
@@ -1044,7 +1083,8 @@ try {
             $requireFull,
             $requireTitle,
             $requireRequests,
-            $requireWarehouses
+            $requireWarehouses,
+            true
         );
         if (!$ok) {
             jsonOut(['success' => false, 'message' => $msg, 'errors' => $errors]);
@@ -1082,6 +1122,7 @@ try {
                     actual_end_date = :actual_end_date,
                     unload_type = :unload_type,
                     route_type = :route_type,
+                    legal_entity_code = :legal_entity_code,
                     source_warehouse_id = :source_warehouse_id,
                     destination_warehouse_id = :destination_warehouse_id,
                     driver_id = :driver_id,
@@ -1100,6 +1141,7 @@ try {
                 ':actual_end_date' => $actualEndValue,
                 ':unload_type' => $normalized['unload_type'],
                 ':route_type' => $normalized['route_type'],
+                ':legal_entity_code' => $normalized['legal_entity_code'],
                 ':source_warehouse_id' => $normalized['source_warehouse_id'],
                 ':destination_warehouse_id' => $normalized['destination_warehouse_id'],
                 ':driver_id' => $normalized['driver_id'],
@@ -1158,8 +1200,8 @@ try {
         $quotedManagerColumn = quoteIdent($managerColumn);
 
         $stmt = $pdo->prepare("
-            INSERT INTO flights (status, comment, cost, unload_type, route_type, source_warehouse_id, destination_warehouse_id, zayavki_ids, zayavki_count, {$quotedManagerColumn}, planned_start_date_from, planned_start_date_to, driver_id, block_date)
-            VALUES (:status, :comment, :cost, :unload_type, :route_type, :source_warehouse_id, :destination_warehouse_id, :zayavki_ids, :count, :assigned_manager_id, :planned_from, :planned_to, :driver_id, NOW())
+            INSERT INTO flights (status, comment, cost, unload_type, route_type, legal_entity_code, source_warehouse_id, destination_warehouse_id, zayavki_ids, zayavki_count, {$quotedManagerColumn}, planned_start_date_from, planned_start_date_to, driver_id, block_date)
+            VALUES (:status, :comment, :cost, :unload_type, :route_type, :legal_entity_code, :source_warehouse_id, :destination_warehouse_id, :zayavki_ids, :count, :assigned_manager_id, :planned_from, :planned_to, :driver_id, NOW())
         ");
         $stmt->execute([
             ':status' => STATUS_PLANNED,
@@ -1167,6 +1209,7 @@ try {
             ':cost' => $normalized['cost'],
             ':unload_type' => $normalized['unload_type'],
             ':route_type' => $normalized['route_type'],
+            ':legal_entity_code' => $normalized['legal_entity_code'],
             ':source_warehouse_id' => $normalized['source_warehouse_id'],
             ':destination_warehouse_id' => $normalized['destination_warehouse_id'],
             ':zayavki_ids' => $normalized['zayavki_ids_canonical'],
@@ -1200,6 +1243,7 @@ try {
             "#{$routeId} {$title} - Удален из системы\n" .
             ($unloadLine !== '' ? ($unloadLine . "\n") : '') .
             ($routeTypeLine !== '' ? ($routeTypeLine . "\n") : '') .
+            buildLegalEntityLine($flight) . "\n" .
             "Рейс закреплен: {$manager}"
         , 'route_deleted', buildRouteEventContext($pdo, $flight, $routeId, [
             'status_from' => STATUS_PLANNED,
@@ -1234,6 +1278,7 @@ try {
                 if (!array_key_exists('cost', $payload) || $payload['cost'] === '' || $payload['cost'] === null) $payload['cost'] = $flight['cost'] ?? null;
                 if (!isset($payload['unload_type']) || trim((string)$payload['unload_type']) === '') $payload['unload_type'] = (string)($flight['unload_type'] ?? 'OO');
                 if (!isset($payload['route_type']) || trim((string)$payload['route_type']) === '') $payload['route_type'] = (string)($flight['route_type'] ?? '');
+                if (!isset($payload['legal_entity_code']) || trim((string)$payload['legal_entity_code']) === '') $payload['legal_entity_code'] = (string)($flight['legal_entity_code'] ?? '');
                 if (!array_key_exists('source_warehouse_id', $payload)) $payload['source_warehouse_id'] = $flight['source_warehouse_id'] ?? null;
                 if (!array_key_exists('destination_warehouse_id', $payload)) $payload['destination_warehouse_id'] = $flight['destination_warehouse_id'] ?? null;
                 if (!isset($payload['name']) || trim((string)$payload['name']) === '') $payload['name'] = trim((string)($flight['comment'] ?? $flight['name'] ?? ''));
@@ -1245,6 +1290,7 @@ try {
                 $payload,
                 $strictFoundTransition,
                 $requireTitle,
+                $strictFoundTransition,
                 $strictFoundTransition,
                 $strictFoundTransition
             );
@@ -1262,6 +1308,7 @@ try {
                     planned_start_date_to = :planned_to,
                     unload_type = :unload_type,
                     route_type = :route_type,
+                    legal_entity_code = :legal_entity_code,
                     source_warehouse_id = :source_warehouse_id,
                     destination_warehouse_id = :destination_warehouse_id,
                     driver_id = :driver_id,
@@ -1278,6 +1325,7 @@ try {
                 ':planned_to' => $normalized['planned_start_date_to'],
                 ':unload_type' => $normalized['unload_type'],
                 ':route_type' => $normalized['route_type'],
+                ':legal_entity_code' => $normalized['legal_entity_code'],
                 ':source_warehouse_id' => $normalized['source_warehouse_id'],
                 ':destination_warehouse_id' => $normalized['destination_warehouse_id'],
                 ':driver_id' => $normalized['driver_id'],
@@ -1333,6 +1381,7 @@ try {
                     "#{$routeId} {$title}",
                     buildUnloadLine($afterStarted),
                     buildRouteTypeLine($pdo, $afterStarted),
+                    buildLegalEntityLine($afterStarted),
                     "Водитель: {$driver}",
                     "Старт: " . formatDateShortRu($afterStarted['actual_start_date'] ?? ''),
                     "Заявки: " . (int)($afterStarted['_count'] ?? 0),
@@ -1394,6 +1443,7 @@ try {
                     '───────────────────',
                     buildUnloadLine($afterCompleted),
                     buildRouteTypeLine($pdo, $afterCompleted),
+                    buildLegalEntityLine($afterCompleted),
                     $driver,
                     "#{$routeId} — {$title}",
                     '> 💡 *Напоминаю: для оплаты подрядчику нужен полный пакет документов (диагностическая карта, путевой лист и т.д.). Прошу не затягивать с предоставлением.*'
@@ -1431,6 +1481,7 @@ try {
                     "#{$routeId} {$title}\n" .
                     (buildUnloadLine($after) !== '' ? (buildUnloadLine($after) . "\n") : '') .
                     (buildRouteTypeLine($pdo, $after) !== '' ? (buildRouteTypeLine($pdo, $after) . "\n") : '') .
+                    buildLegalEntityLine($after) . "\n" .
                     "Водитель: {$driver}\n" .
                     "Старт: " . formatDateShortRu($oldActualStartDate ?? '') . "\n" .
                     "Заявки: " . (int)($after['_count'] ?? 0) . "\n" .
@@ -1465,6 +1516,7 @@ try {
                 "возвращён в «Планируемый»\n" .
                 (buildUnloadLine($after) !== '' ? (buildUnloadLine($after) . "\n") : '') .
                 (buildRouteTypeLine($pdo, $after) !== '' ? (buildRouteTypeLine($pdo, $after) . "\n") : '') .
+                buildLegalEntityLine($after) . "\n" .
                 "Рейс закреплен: {$manager}\n" .
                 "> 💡 *Подготовку документов приостановить до переформирования рейса.*"
             , 'route_found_to_planned_rollback', buildRouteEventContext($pdo, $after, $routeId, [
@@ -1485,5 +1537,3 @@ try {
     mapError('save_planned_route fatal', ['error' => $e->getMessage()]);
     jsonOut(['success' => false, 'message' => 'Внутренняя ошибка']);
 }
-
-

@@ -12,6 +12,24 @@ function trunc50($s, $limit) {
     return htmlspecialchars($s, ENT_QUOTES, 'UTF-8');
 }
 
+const FLIGHT_LEGAL_ENTITIES = [
+    'planex' => 'ООО «Планэкс»',
+    'mg_logistic' => 'ООО «МГ Логистик»',
+];
+
+function normalizeFlightLegalEntity($value) {
+    $code = strtolower(trim((string)$value));
+    if (!array_key_exists($code, FLIGHT_LEGAL_ENTITIES)) {
+        throw new Exception('Выберите юридическое лицо рейса');
+    }
+    return $code;
+}
+
+function flightLegalEntityLabel($code) {
+    $normalized = strtolower(trim((string)$code));
+    return FLIGHT_LEGAL_ENTITIES[$normalized] ?? 'Не указано';
+}
+
 // Подключение к БД
 try {
 $pdo = new PDO(
@@ -35,6 +53,7 @@ CREATE TABLE IF NOT EXISTS `flights` (
 `zayavki_count` int(11) NOT NULL DEFAULT 0,
 `total_mass_tonn` decimal(10,3) DEFAULT NULL,
 `unload_type` enum('OO','SKLAD') NOT NULL DEFAULT 'OO' COMMENT 'Выгрузка: ОО или СКЛАД',
+`legal_entity_code` varchar(32) DEFAULT NULL COMMENT 'Юридическое лицо рейса',
 `status` varchar(50) NOT NULL DEFAULT 'search' COMMENT 'Статус рейса',
 `contractor_id` int(11) DEFAULT NULL COMMENT 'ID подрядчика',
 `driver_id` bigint(20) UNSIGNED DEFAULT NULL COMMENT 'ID водителя',
@@ -181,6 +200,7 @@ throw new Exception('Ошибка безопасности. Пожалуйста
 }
 $zayavki_input = trim($_POST['zayavki'] ?? '');
 $unload_type = $_POST['unload_type'] ?? 'OO';
+$legal_entity_code = normalizeFlightLegalEntity($_POST['legal_entity_code'] ?? '');
 $status = $_POST['status'] ?? 'search';
 $contractor_id = !empty($_POST['contractor_id']) ? (int)$_POST['contractor_id'] : null;
 $driver_id = !empty($_POST['driver_id']) ? (int)$_POST['driver_id'] : null;
@@ -231,14 +251,15 @@ $total_mass += floatval($row['mass_netto'] ?? 0);
 if (!empty($existing_zayavki)) {
 $zayavki_ids_string = implode(',', $existing_zayavki);
 $stmt_flight = $pdo->prepare("
-INSERT INTO flights (zayavki_ids, zayavki_count, total_mass_tonn, unload_type, status, contractor_id, driver_id, cost, payment_terms, comment, planned_start_date, planned_start_date_from, planned_start_date_to, actual_start_date, actual_end_date, assigned_manager_id)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO flights (zayavki_ids, zayavki_count, total_mass_tonn, unload_type, legal_entity_code, status, contractor_id, driver_id, cost, payment_terms, comment, planned_start_date, planned_start_date_from, planned_start_date_to, actual_start_date, actual_end_date, assigned_manager_id)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ");
 $stmt_flight->execute([
 $zayavki_ids_string,
 count($existing_zayavki),
 $total_mass,
 $unload_type,
+$legal_entity_code,
 $status,
 $contractor_id,
 $driver_id,
@@ -266,6 +287,40 @@ echo json_encode([
 } else {
 throw new Exception('Ни одна из заявок не найдена в БД');
 }
+} catch (Exception $e) {
+echo json_encode(['success' => false, 'message' => $e->getMessage()]);
+}
+exit;
+}
+// Отдельное безопасное заполнение юрлица для старых, в том числе исполненных, рейсов
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_flight_legal_entity'])) {
+header('Content-Type: application/json');
+try {
+if (!isset($_POST['form_token']) || $_POST['form_token'] !== $_SESSION['form_token']) {
+throw new Exception('Ошибка безопасности. Пожалуйста, обновите страницу.');
+}
+if (!isset($_POST['flight_id']) || !is_numeric($_POST['flight_id'])) {
+throw new Exception('Неверный ID рейса');
+}
+$flight_id = (int)$_POST['flight_id'];
+$legal_entity_code = normalizeFlightLegalEntity($_POST['legal_entity_code'] ?? '');
+$stmt = $pdo->prepare('UPDATE flights SET legal_entity_code = ? WHERE id = ?');
+$stmt->execute([$legal_entity_code, $flight_id]);
+if ($stmt->rowCount() === 0) {
+$check = $pdo->prepare('SELECT id FROM flights WHERE id = ?');
+$check->execute([$flight_id]);
+if (!$check->fetchColumn()) {
+throw new Exception('Рейс не найден');
+}
+}
+$_SESSION['form_token'] = bin2hex(random_bytes(32));
+echo json_encode([
+'success' => true,
+'message' => 'Юридическое лицо сохранено',
+'legal_entity_code' => $legal_entity_code,
+'legal_entity_label' => flightLegalEntityLabel($legal_entity_code),
+'new_token' => $_SESSION['form_token']
+]);
 } catch (Exception $e) {
 echo json_encode(['success' => false, 'message' => $e->getMessage()]);
 }
@@ -334,6 +389,7 @@ throw new Exception('Неверный ID рейса');
 $flight_id = (int)$_POST['flight_id'];
 $zayavki_input = trim($_POST['zayavki'] ?? '');
 $unload_type = $_POST['unload_type'] ?? 'OO';
+$legal_entity_code = normalizeFlightLegalEntity($_POST['legal_entity_code'] ?? '');
 $status = $_POST['status'] ?? 'search';
 $contractor_id = !empty($_POST['contractor_id']) ? (int)$_POST['contractor_id'] : null;
 $driver_id = !empty($_POST['driver_id']) ? (int)$_POST['driver_id'] : null;
@@ -381,7 +437,7 @@ $zayavki_ids_string = implode(',', $existing_zayavki);
 $stmt = $pdo->prepare("
 UPDATE flights
 SET zayavki_ids = ?, zayavki_count = ?, total_mass_tonn = ?,
-unload_type = ?, status = ?, contractor_id = ?, driver_id = ?,
+unload_type = ?, legal_entity_code = ?, status = ?, contractor_id = ?, driver_id = ?,
 cost = ?, payment_terms = ?, comment = ?,
 planned_start_date = ?, planned_start_date_from = ?, planned_start_date_to = ?,
 actual_start_date = ?, actual_end_date = ?, assigned_manager_id = ?
@@ -392,6 +448,7 @@ $zayavki_ids_string,
 count($existing_zayavki),
 $total_mass,
 $unload_type,
+$legal_entity_code,
 $status,
 $contractor_id,
 $driver_id,
@@ -615,6 +672,28 @@ margin-bottom: 0;
 color: #666;
 font-weight: 500;
 }
+.legal-entity-field {
+border: 1px solid #d9dee7;
+border-radius: 6px;
+padding: 12px 14px;
+}
+.legal-entity-options {
+display: flex;
+flex-wrap: wrap;
+gap: 12px 24px;
+margin-top: 8px;
+}
+.legal-entity-options label {
+display: inline-flex;
+align-items: center;
+gap: 7px;
+font-weight: 500;
+cursor: pointer;
+}
+.legal-entity-missing {
+color: #b42318;
+font-weight: 600;
+}
 /* Стиль для столбца ЗАКАЗЧИК */
 .zakazchiki-cell {
 max-width: 150px;
@@ -700,6 +779,13 @@ required
 </select>
 </div>
 </div>
+<fieldset class="form-group legal-entity-field">
+<legend>Юридическое лицо рейса *</legend>
+<div class="legal-entity-options">
+<label><input type="radio" name="legal_entity_code" value="planex" required> ООО «Планэкс»</label>
+<label><input type="radio" name="legal_entity_code" value="mg_logistic" required> ООО «МГ Логистик»</label>
+</div>
+</fieldset>
 <div class="form-group">
 <label>Планируемая дата начала:</label>
 <div class="date-range-group">
@@ -832,7 +918,12 @@ style="width: 100%;"
 <tr class="group-header" onclick="toggleFlight('details_<?= $flight['id'] ?>', event)">
 <td style="text-align: center;">▶</td>
 <td><strong>#<?= $flight['id'] ?></strong></td>
-<td><?= !empty($flight['comment']) ? htmlspecialchars($flight['comment']) : '<span style="color:#999;">—</span>' ?></td>
+<td>
+<?= !empty($flight['comment']) ? htmlspecialchars($flight['comment']) : '<span style="color:#999;">—</span>' ?>
+<br><small class="<?= empty($flight['legal_entity_code']) ? 'legal-entity-missing' : '' ?>">
+<?= htmlspecialchars(flightLegalEntityLabel($flight['legal_entity_code'] ?? '')) ?>
+</small>
+</td>
 <td style="text-align: center;">
 <?php if ($flight['unload_type'] === 'OO'): ?>
 <span style="color:#999;">—</span>
@@ -1046,6 +1137,7 @@ function clearForm() {
 document.getElementById('zayavki').value = '';
 document.getElementById('unload_type').value = 'OO';
 document.getElementById('status').value = 'search';
+document.querySelectorAll('#addForm input[name="legal_entity_code"]').forEach(input => { input.checked = false; });
 document.getElementById('contractor_id').value = '';
 document.getElementById('driver_id').value = '';
 document.getElementById('assigned_manager_id').value = '';
@@ -1123,6 +1215,8 @@ formData.append('form_token', currentFormToken);
 formData.append('zayavki', document.getElementById('zayavki').value);
 formData.append('unload_type', document.getElementById('unload_type').value);
 formData.append('status', document.getElementById('status').value);
+const legalEntity = document.querySelector('#addForm input[name="legal_entity_code"]:checked');
+formData.append('legal_entity_code', legalEntity ? legalEntity.value : '');
 formData.append('contractor_id', document.getElementById('contractor_id').value);
 formData.append('driver_id', document.getElementById('driver_id').value);
 formData.append('assigned_manager_id', document.getElementById('assigned_manager_id').value);
@@ -1334,6 +1428,14 @@ ${flight.status === '<?= $s['статус'] ?>' ? 'selected' : ''}>
 </select>
 </div>
 </div>
+<fieldset class="form-group legal-entity-field">
+<legend>Юридическое лицо рейса *</legend>
+<div class="legal-entity-options">
+<label><input type="radio" name="legal_entity_code" value="planex" required ${flight.legal_entity_code === 'planex' ? 'checked' : ''}> ООО «Планэкс»</label>
+<label><input type="radio" name="legal_entity_code" value="mg_logistic" required ${flight.legal_entity_code === 'mg_logistic' ? 'checked' : ''}> ООО «МГ Логистик»</label>
+</div>
+${flight.legal_entity_code ? '' : '<div class="legal-entity-missing" style="margin-top:8px;">Для старого рейса юридическое лицо ещё не указано. Выберите его перед сохранением.</div>'}
+</fieldset>
 <div class="form-group">
 <label>Планируемая дата начала:</label>
 <div class="date-range-group">
@@ -1438,6 +1540,7 @@ style="width: 100%;"
 </div>
 <div class="modal-actions">
 <button type="submit" class="btn btn-primary" id="editSubmitBtn">Сохранить изменения</button>
+<button type="button" class="btn" id="legalEntityOnlyBtn" onclick="saveFlightLegalEntity(${flight.id})">Сохранить только юрлицо</button>
 <button type="button" class="btn btn-secondary" onclick="closeEditModal()">Отмена</button>
 </div>
 </form>
@@ -1582,6 +1685,34 @@ submitBtn.classList.remove('btn-loading');
 submitBtn.disabled = false;
 });
 return false;
+}
+function saveFlightLegalEntity(flightId) {
+const selected = document.querySelector('#editForm input[name="legal_entity_code"]:checked');
+if (!selected) {
+alert('Выберите юридическое лицо рейса');
+return;
+}
+const button = document.getElementById('legalEntityOnlyBtn');
+button.classList.add('btn-loading');
+button.disabled = true;
+const formData = new FormData();
+formData.append('set_flight_legal_entity', '1');
+formData.append('form_token', currentFormToken);
+formData.append('flight_id', String(flightId));
+formData.append('legal_entity_code', selected.value);
+fetch('', { method: 'POST', body: formData })
+.then(response => response.json())
+.then(data => {
+if (!data.success) throw new Error(data.message || 'Не удалось сохранить юридическое лицо');
+if (data.new_token) currentFormToken = data.new_token;
+alert(data.message);
+location.reload();
+})
+.catch(error => {
+alert('Ошибка: ' + error.message);
+button.classList.remove('btn-loading');
+button.disabled = false;
+});
 }
 function closeEditModal() {
 document.getElementById('editModal').classList.remove('show');
