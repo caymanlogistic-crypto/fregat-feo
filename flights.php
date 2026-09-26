@@ -42,6 +42,51 @@ function flightLegalEntityCssClass($code) {
     return 'legal-entity-name legal-entity-missing';
 }
 
+function getFlightsWarehouseNameColumn(PDO $pdo) {
+    static $checked = false;
+    static $column = null;
+    if ($checked) {
+        return $column;
+    }
+    $checked = true;
+    try {
+        $columns = $pdo->query("SHOW COLUMNS FROM warehouses")->fetchAll(PDO::FETCH_COLUMN);
+        $columnMap = array_fill_keys(array_map('strval', (array)$columns), true);
+        foreach (['name', 'title', 'warehouse_name', 'label'] as $candidate) {
+            if (isset($columnMap[$candidate])) {
+                $column = '`' . str_replace('`', '``', $candidate) . '`';
+                break;
+            }
+        }
+    } catch (Throwable $e) {
+        $column = null;
+    }
+    return $column;
+}
+
+function flightWarehouseLabel(array $flight) {
+    $routeType = strtolower(trim((string)($flight['route_type'] ?? '')));
+    $sourceName = trim((string)($flight['source_warehouse_name'] ?? ''));
+    $destinationName = trim((string)($flight['destination_warehouse_name'] ?? ''));
+
+    if ($routeType === 'generator_to_warehouse') {
+        return $destinationName;
+    }
+    if ($routeType === 'warehouse_to_warehouse') {
+        if ($sourceName !== '' && $destinationName !== '') {
+            return $sourceName . ' → ' . $destinationName;
+        }
+        return $destinationName !== '' ? $destinationName : $sourceName;
+    }
+    if ($routeType === 'warehouse_to_utilizer') {
+        return $sourceName;
+    }
+    if ($routeType === '' && strtoupper(trim((string)($flight['unload_type'] ?? ''))) === 'SKLAD') {
+        return $destinationName;
+    }
+    return '';
+}
+
 // Подключение к БД
 try {
 $pdo = new PDO(
@@ -539,16 +584,25 @@ $flights = [];
 $total_unique_zayavok = 0;
 $total_unique_mass_kg = 0;
 try {
+$warehouseNameColumn = getFlightsWarehouseNameColumn($pdo);
+$warehouseNameSelect = $warehouseNameColumn !== null
+? ", ws.{$warehouseNameColumn} AS source_warehouse_name, wd.{$warehouseNameColumn} AS destination_warehouse_name"
+: ", '' AS source_warehouse_name, '' AS destination_warehouse_name";
+$warehouseJoin = $warehouseNameColumn !== null
+? " LEFT JOIN warehouses ws ON ws.id = f.source_warehouse_id LEFT JOIN warehouses wd ON wd.id = f.destination_warehouse_id"
+: '';
 $stmt = $pdo->query("
 SELECT f.*,
 c.name as contractor_name,
 d.full_name as driver_name,
 d.vehicle_make_plate,
 CONCAT(u.Фамилия, ' ', u.Имя) as manager_name
+{$warehouseNameSelect}
 FROM flights f
 LEFT JOIN contractors c ON f.contractor_id = c.id
 LEFT JOIN drivers d ON f.driver_id = d.id
 LEFT JOIN users u ON f.assigned_manager_id = u.id
+{$warehouseJoin}
 ORDER BY f.id DESC
 LIMIT 500
 ");
@@ -965,7 +1019,7 @@ style="width: 100%;"
 <th style="width: 30px;"></th>
 <th style="width: 50px;">ID</th>
 <th style="width: 200px;">ОПИСАНИЕ РЕЙСА</th>
-<th style="width: 80px;"></th>
+<th style="width: 140px; text-align: center;">СКЛАД</th>
 <th style="text-align: center;">СТАТУС</th>
 <th style="text-align: center;">ПОДРЯД. / ВОД.</th>
 <th style="text-align: center;">МЕНЕДЖЕР</th>
@@ -992,10 +1046,13 @@ style="width: 100%;"
 </small>
 </td>
 <td style="text-align: center;">
-<?php if ($flight['unload_type'] === 'OO'): ?>
-<span style="color:#999;">—</span>
-<?php else: ?>
+<?php $warehouseLabel = flightWarehouseLabel($flight); ?>
+<?php if ($warehouseLabel !== ''): ?>
+СКЛАД: <?= htmlspecialchars($warehouseLabel, ENT_QUOTES, 'UTF-8') ?>
+<?php elseif ($flight['unload_type'] === 'SKLAD'): ?>
 СКЛАД
+<?php else: ?>
+<span style="color:#999;">—</span>
 <?php endif; ?>
 </td>
 <td style="text-align: center;">
