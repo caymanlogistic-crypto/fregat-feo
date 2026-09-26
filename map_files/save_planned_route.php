@@ -421,6 +421,19 @@ function formatMoneyRu($value): string
     return number_format($num, 0, '.', ' ') . ' ₽';
 }
 
+function legalEntityLabel($code): string
+{
+    $normalized = strtolower(trim((string)$code));
+    if ($normalized === LEGAL_ENTITY_PLANEX) return 'ООО «Планэкс»';
+    if ($normalized === LEGAL_ENTITY_MG_LOGISTIC) return 'ООО «МГ Логистик»';
+    return 'не указано';
+}
+
+function buildLegalEntityLine(array $route): string
+{
+    return 'Юридическое лицо: ' . legalEntityLabel($route['legal_entity_code'] ?? '');
+}
+
 function formatKgFromTons($tons): string
 {
     return number_format((int)round((float)$tons * 1000), 0, '.', ' ') . ' кг';
@@ -724,6 +737,7 @@ function buildRouteDiffContext(PDO $pdo, array $before, array $after, int $fligh
     if ((string)($before['cost'] ?? '') !== (string)($after['cost'] ?? '')) $changedFields[] = 'cost';
     if ((string)($before['zayavki_ids'] ?? '') !== (string)($after['zayavki_ids'] ?? '')) $changedFields[] = 'requests';
     if ((string)($before['route_type'] ?? '') !== (string)($after['route_type'] ?? '')) $changedFields[] = 'route_type';
+    if ((string)($before['legal_entity_code'] ?? '') !== (string)($after['legal_entity_code'] ?? '')) $changedFields[] = 'legal_entity';
     if ((string)($before['source_warehouse_id'] ?? '') !== (string)($after['source_warehouse_id'] ?? '')) $changedFields[] = 'source_warehouse';
     if ((string)($before['destination_warehouse_id'] ?? '') !== (string)($after['destination_warehouse_id'] ?? '')) $changedFields[] = 'destination_warehouse';
     if (trim((string)($before['comment'] ?? '')) !== trim((string)($after['comment'] ?? ''))) $changedFields[] = 'route_title';
@@ -752,6 +766,8 @@ function buildRouteDiffContext(PDO $pdo, array $before, array $after, int $fligh
         'requests_removed' => implode(',', $removed),
         'route_type_old' => (string)($before['route_type'] ?? ''),
         'route_type_new' => (string)($after['route_type'] ?? ''),
+        'legal_entity_old' => legalEntityLabel($before['legal_entity_code'] ?? ''),
+        'legal_entity_new' => legalEntityLabel($after['legal_entity_code'] ?? ''),
         'source_warehouse_old' => (string)($before['source_warehouse_id'] ?? ''),
         'source_warehouse_new' => (string)($after['source_warehouse_id'] ?? ''),
         'destination_warehouse_old' => (string)($before['destination_warehouse_id'] ?? ''),
@@ -777,6 +793,9 @@ function buildRouteEventContext(PDO $pdo, array $route, int $flightId, array $ex
         'responsible' => $manager !== '' ? $manager : 'не назначен',
         'route_type' => (string)$routeType,
         'route_type_line' => $routeTypeLine,
+        'legal_entity_code' => (string)($route['legal_entity_code'] ?? ''),
+        'legal_entity' => legalEntityLabel($route['legal_entity_code'] ?? ''),
+        'legal_entity_line' => buildLegalEntityLine($route),
         'unload_target_line' => $unloadTarget,
         'meta_line' => (trim(buildCompactMetaLine($route)) !== '' ? trim(buildCompactMetaLine($route)) : 'Параметры рейса: не заданы'),
         'requests_count' => (string)((int)($route['_count'] ?? 0)),
@@ -870,6 +889,7 @@ function buildPlannedToFoundMessage(PDO $pdo, array $after, int $flightId): stri
     if ($routeTypeLine !== '') {
         $lines[] = $routeTypeLine;
     }
+    $lines[] = buildLegalEntityLine($after);
     $lines[] = $meta;
     $lines[] = $driver;
     $lines[] = "Рейс закреплен: {$manager}";
@@ -915,6 +935,9 @@ function buildFoundDiffMessage(PDO $pdo, array $before, array $after, int $fligh
     }
     if ((string)($before['route_type'] ?? '') !== (string)($after['route_type'] ?? '')) {
         $blocks[] = "Маршрут груза:\nБыло: " . buildRouteTypeLabel($before) . "\nСтало: " . buildRouteTypeLabel($after);
+    }
+    if ((string)($before['legal_entity_code'] ?? '') !== (string)($after['legal_entity_code'] ?? '')) {
+        $blocks[] = "Юридическое лицо:\nБыло: " . legalEntityLabel($before['legal_entity_code'] ?? '') . "\nСтало: " . legalEntityLabel($after['legal_entity_code'] ?? '');
     }
     if ((int)($before['source_warehouse_id'] ?? 0) !== (int)($after['source_warehouse_id'] ?? 0)) {
         $oldName = getWarehouseNameById($pdo, $before['source_warehouse_id'] ?? 0);
@@ -982,6 +1005,9 @@ function buildStartedDiffMessage(PDO $pdo, array $before, array $after, int $fli
     }
     if ((string)($before['route_type'] ?? '') !== (string)($after['route_type'] ?? '')) {
         $blocks[] = "Маршрут груза:\nБыло: " . buildRouteTypeLabel($before) . "\nСтало: " . buildRouteTypeLabel($after);
+    }
+    if ((string)($before['legal_entity_code'] ?? '') !== (string)($after['legal_entity_code'] ?? '')) {
+        $blocks[] = "Юридическое лицо:\nБыло: " . legalEntityLabel($before['legal_entity_code'] ?? '') . "\nСтало: " . legalEntityLabel($after['legal_entity_code'] ?? '');
     }
     if ((int)($before['source_warehouse_id'] ?? 0) !== (int)($after['source_warehouse_id'] ?? 0)) {
         $oldName = getWarehouseNameById($pdo, $before['source_warehouse_id'] ?? 0);
@@ -1217,6 +1243,7 @@ try {
             "#{$routeId} {$title} - Удален из системы\n" .
             ($unloadLine !== '' ? ($unloadLine . "\n") : '') .
             ($routeTypeLine !== '' ? ($routeTypeLine . "\n") : '') .
+            buildLegalEntityLine($flight) . "\n" .
             "Рейс закреплен: {$manager}"
         , 'route_deleted', buildRouteEventContext($pdo, $flight, $routeId, [
             'status_from' => STATUS_PLANNED,
@@ -1354,6 +1381,7 @@ try {
                     "#{$routeId} {$title}",
                     buildUnloadLine($afterStarted),
                     buildRouteTypeLine($pdo, $afterStarted),
+                    buildLegalEntityLine($afterStarted),
                     "Водитель: {$driver}",
                     "Старт: " . formatDateShortRu($afterStarted['actual_start_date'] ?? ''),
                     "Заявки: " . (int)($afterStarted['_count'] ?? 0),
@@ -1415,6 +1443,7 @@ try {
                     '───────────────────',
                     buildUnloadLine($afterCompleted),
                     buildRouteTypeLine($pdo, $afterCompleted),
+                    buildLegalEntityLine($afterCompleted),
                     $driver,
                     "#{$routeId} — {$title}",
                     '> 💡 *Напоминаю: для оплаты подрядчику нужен полный пакет документов (диагностическая карта, путевой лист и т.д.). Прошу не затягивать с предоставлением.*'
@@ -1452,6 +1481,7 @@ try {
                     "#{$routeId} {$title}\n" .
                     (buildUnloadLine($after) !== '' ? (buildUnloadLine($after) . "\n") : '') .
                     (buildRouteTypeLine($pdo, $after) !== '' ? (buildRouteTypeLine($pdo, $after) . "\n") : '') .
+                    buildLegalEntityLine($after) . "\n" .
                     "Водитель: {$driver}\n" .
                     "Старт: " . formatDateShortRu($oldActualStartDate ?? '') . "\n" .
                     "Заявки: " . (int)($after['_count'] ?? 0) . "\n" .
@@ -1486,6 +1516,7 @@ try {
                 "возвращён в «Планируемый»\n" .
                 (buildUnloadLine($after) !== '' ? (buildUnloadLine($after) . "\n") : '') .
                 (buildRouteTypeLine($pdo, $after) !== '' ? (buildRouteTypeLine($pdo, $after) . "\n") : '') .
+                buildLegalEntityLine($after) . "\n" .
                 "Рейс закреплен: {$manager}\n" .
                 "> 💡 *Подготовку документов приостановить до переформирования рейса.*"
             , 'route_found_to_planned_rollback', buildRouteEventContext($pdo, $after, $routeId, [
@@ -1506,4 +1537,3 @@ try {
     mapError('save_planned_route fatal', ['error' => $e->getMessage()]);
     jsonOut(['success' => false, 'message' => 'Внутренняя ошибка']);
 }
-
