@@ -7,7 +7,12 @@ class SlitexClient
     public function __construct($baseUrl, $token)
     {
         $this->baseUrl = rtrim($baseUrl, '/');
-        $this->token = $token;
+        $this->token = trim((string)$token);
+    }
+
+    private function isConfigured(): bool
+    {
+        return $this->baseUrl !== '' && $this->token !== '';
     }
 
     public function fetchDevices()
@@ -113,6 +118,10 @@ class SlitexClient
 
     public function renameDevice(string $uniqueid, string $name): array
     {
+        if (!$this->isConfigured()) {
+            return ['success' => false, 'status' => 0, 'error' => 'SLITEX integration is disabled', 'body' => ''];
+        }
+
         $lock = $this->acquireRenameLock();
         if (!($lock['success'] ?? false)) {
             return ['success' => false, 'status' => 0, 'error' => (string)($lock['error'] ?? 'SLITEX rename lock failed'), 'body' => ''];
@@ -185,6 +194,10 @@ class SlitexClient
 
     public function fetch($path)
     {
+        if (!$this->isConfigured()) {
+            return [];
+        }
+
         $url = $this->baseUrl . $path;
 
         $ch = curl_init();
