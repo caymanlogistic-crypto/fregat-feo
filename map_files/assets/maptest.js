@@ -3220,6 +3220,7 @@ function syncCreateRouteWarehouseVisibility() {
     if (warehouseGroup) {
         const hasVisibleFields = showSource || showDest;
         warehouseGroup.style.display = hasVisibleFields ? 'grid' : 'none';
+        warehouseGroup.classList.toggle('is-visible', hasVisibleFields);
     }
 }
 
