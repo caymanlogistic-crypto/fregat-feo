@@ -16,6 +16,7 @@ const FLIGHT_LEGAL_ENTITIES = [
     'planex' => 'ООО «Планэкс»',
     'mg_logistic' => 'ООО «МГ Логистик»',
 ];
+const LEGACY_FLIGHT_MAX_ID = 244;
 
 function normalizeFlightLegalEntity($value) {
     $code = strtolower(trim((string)$value));
@@ -694,6 +695,42 @@ cursor: pointer;
 color: #b42318;
 font-weight: 600;
 }
+.flights-list-header {
+display: flex;
+align-items: center;
+justify-content: space-between;
+gap: 16px;
+margin-bottom: 15px;
+}
+.flights-list-header h2 {
+margin: 0;
+}
+.legacy-flights-toggle {
+display: inline-flex;
+align-items: center;
+gap: 8px;
+margin-left: auto;
+font-size: 14px;
+font-weight: 500;
+white-space: nowrap;
+cursor: pointer;
+}
+.legacy-flights-toggle input {
+margin: 0;
+}
+body:not(.show-legacy-flights) tr.legacy-flight-row {
+display: none !important;
+}
+@media (max-width: 720px) {
+.flights-list-header {
+align-items: flex-start;
+flex-direction: column;
+}
+.legacy-flights-toggle {
+margin-left: 0;
+white-space: normal;
+}
+}
 /* Стиль для столбца ЗАКАЗЧИК */
 .zakazchiki-cell {
 max-width: 150px;
@@ -891,7 +928,13 @@ style="width: 100%;"
 </div>
 <?php if (!empty($flights)): ?>
 <div class="card">
+<div class="flights-list-header">
 <h2>Список рейсов</h2>
+<label class="legacy-flights-toggle">
+<input type="checkbox" id="showLegacyFlights" aria-controls="flightsTable">
+Показать старые рейсы (ID ≤ <?= LEGACY_FLIGHT_MAX_ID ?>)
+</label>
+</div>
 <div class="table-wrapper">
 <table class="data-table" id="flightsTable">
 <thead>
@@ -915,7 +958,8 @@ style="width: 100%;"
 </thead>
 <tbody>
 <?php foreach ($flights as $flight): ?>
-<tr class="group-header" onclick="toggleFlight('details_<?= $flight['id'] ?>', event)">
+<?php $isLegacyFlight = (int)$flight['id'] <= LEGACY_FLIGHT_MAX_ID; ?>
+<tr class="group-header<?= $isLegacyFlight ? ' legacy-flight-row' : '' ?>" data-flight-id="<?= (int)$flight['id'] ?>" onclick="toggleFlight('details_<?= $flight['id'] ?>', event)">
 <td style="text-align: center;">▶</td>
 <td><strong>#<?= $flight['id'] ?></strong></td>
 <td>
@@ -1066,7 +1110,7 @@ echo '<span style="color:#999;">—</span>';
 <button class="btn btn-sm btn-delete" onclick="deleteFlight(<?= $flight['id'] ?>, event)">✖</button>
 </td>
 </tr>
-<tr id="details_<?= $flight['id'] ?>" style="display: none;">
+<tr id="details_<?= $flight['id'] ?>" class="flight-details<?= $isLegacyFlight ? ' legacy-flight-row' : '' ?>" data-flight-id="<?= (int)$flight['id'] ?>" style="display: none;">
 <td colspan="15" style="padding: 0;">
 <div class="block-details">
 <table class="details-table">
@@ -1133,6 +1177,12 @@ let isSubmitting = false;
 let currentFormToken = '<?= $current_token ?>';
 let validationTimeout = null;
 let lastValidationResult = { found_count: 0, total_count: 0, not_found: [], invalid_format: [] };
+const legacyFlightsToggle = document.getElementById('showLegacyFlights');
+if (legacyFlightsToggle) {
+legacyFlightsToggle.addEventListener('change', function() {
+document.body.classList.toggle('show-legacy-flights', this.checked);
+});
+}
 function clearForm() {
 document.getElementById('zayavki').value = '';
 document.getElementById('unload_type').value = 'OO';
