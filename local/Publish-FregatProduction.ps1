@@ -134,6 +134,9 @@ try {
     $manifest = Join-Path $tempRoot 'manifest.txt'
     $manifestText = if ($deployFiles.Count -gt 0) { ($deployFiles -join "`n") + "`n" } else { '' }
     [System.IO.File]::WriteAllText($manifest, $manifestText, [System.Text.UTF8Encoding]::new($false))
+    $remoteApplyUpload = Join-Path $tempRoot 'remote-apply.sh'
+    $remoteApplyText = [System.IO.File]::ReadAllText($remoteApply).Replace("`r`n", "`n").Replace("`r", "`n")
+    [System.IO.File]::WriteAllText($remoteApplyUpload, $remoteApplyText, [System.Text.UTF8Encoding]::new($false))
 
     $remoteStage = "$stateDir/staging/$head"
     Invoke-Native ssh @('-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', $SshAlias, "mkdir -p '$remoteStage/files' '$stateDir/control'")
@@ -148,7 +151,7 @@ try {
     }
 
     Invoke-Native scp @('-q', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', $manifest, "${SshAlias}:$remoteStage/manifest.txt")
-    Invoke-Native scp @('-q', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', $remoteApply, "${SshAlias}:$stateDir/control/remote-apply.sh")
+    Invoke-Native scp @('-q', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', $remoteApplyUpload, "${SshAlias}:$stateDir/control/remote-apply.sh")
     Invoke-Native ssh @('-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', $SshAlias, "bash '$stateDir/control/remote-apply.sh' '$remoteState' '$head' '$targetRoot' '$stateDir'")
 
     Invoke-Native curl.exe @('--fail', '--silent', '--show-error', '--max-time', '20', '--output', 'NUL', $ProductionUrl)
