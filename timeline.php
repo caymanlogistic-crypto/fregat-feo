@@ -152,7 +152,7 @@ function getFlightsWithFilter($pdo,$statusMap,$zayavkiInfo,$filterType='all'){
             $zayavki_ids=array_filter(explode(',',$flight['zayavki_ids']));$flight['zayavki_ids_array']=$zayavki_ids;
             if(!empty($zayavki_ids)){
                 $pl=implode(',',array_fill(0,count($zayavki_ids),'?'));
-                $stmt2=$pdo->prepare("SELECT zayavka_id,mass_netto,naim_oo_gruzootpravitel,mno_adres_pogruzki FROM feo WHERE zayavka_id IN({$pl})");
+                $stmt2=$pdo->prepare("SELECT zayavka_id,mass_brutto,naim_oo_gruzootpravitel,mno_adres_pogruzki FROM feo WHERE zayavka_id IN({$pl})");
                 $stmt2->execute($zayavki_ids);$zayavkiData=$stmt2->fetchAll();
                 $enriched=[];$uniqAddr=[];$prepCnt=0;
                 foreach($zayavkiData as $z){
@@ -163,7 +163,7 @@ function getFlightsWithFilter($pdo,$statusMap,$zayavkiInfo,$filterType='all'){
                     $enriched[]=$ez;
                 }
                 $flight['zayavki']=$enriched;$flight['unique_addresses_count']=count($uniqAddr);$flight['prep_time_filled_count']=$prepCnt;$flight['total_zayavki_count']=count($zayavkiData);
-                $mass=0;foreach($flight['zayavki'] as $zz)$mass+=floatval($zz['mass_netto']??0)*1000;$flight['total_mass_kg']=$mass;
+                $mass=0;foreach($flight['zayavki'] as $zz)$mass+=floatval($zz['mass_brutto']??0)*1000;$flight['total_mass_kg']=$mass;
             }else{$flight['zayavki']=[];$flight['total_mass_kg']=0;$flight['unique_addresses_count']=0;$flight['prep_time_filled_count']=0;$flight['total_zayavki_count']=0;}
             $processedFlights[]=$flight;
         }
@@ -236,14 +236,14 @@ include('include/price.php');
 <tr>
 <th style="width:30px;"></th><th style="width:150px;">ПЛАНИРУЕМАЯ ДАТА</th><th style="width:50px;">ID</th><th style="width:200px;">ОПИСАНИЕ РЕЙСА</th><th style="width:170px;text-align:center;">СКЛАД ЗАГРУЗКИ</th><th style="width:170px;text-align:center;">СКЛАД ВЫГРУЗКИ</th>
 <th style="text-align:center;">СТАТУС</th><th style="text-align:center;">ВОДИТЕЛЬ / МАШИНА</th><th style="text-align:center;">МЕНЕДЖЕР</th>
-<th style="text-align:center;">ПРОЗВОН</th><th style="text-align:center;">КОЛ-ВО АДРЕСОВ / ЗАЯВОК</th><th style="text-align:center;">ОБЩИЙ ВЕС, КГ</th><th style="text-align:center;">ДЕЙСТВИЯ</th>
+<th style="text-align:center;">ПРОЗВОН</th><th style="text-align:center;">КОЛ-ВО АДРЕСОВ / ЗАЯВОК</th><th style="text-align:center;">ОБЩИЙ ВЕС БРУТТО, КГ</th><th style="text-align:center;">ДЕЙСТВИЯ</th>
 </tr>
 </thead><tbody>
 <?php foreach($flights as $flight):
 $warehouseNames = getWarehouseNamesForFlight($flight);
 $warehouseLoadingName = $warehouseNames['loading'];
 $warehouseUnloadingName = $warehouseNames['unloading'];
-$zd=[];foreach($flight['zayavki'] as $z){$w=number_format(floatval($z['mass_netto']??0),3,'.','');$w=str_replace('.',',',$w);$zd[]=['id'=>$z['zayavka_id'],'weight'=>$w];}
+$zd=[];foreach($flight['zayavki'] as $z){$w=number_format(floatval($z['mass_brutto']??0),3,'.','');$w=str_replace('.',',',$w);$zd[]=['id'=>$z['zayavka_id'],'weight'=>$w];}
 $zj=htmlspecialchars(json_encode($zd,JSON_UNESCAPED_UNICODE),ENT_QUOTES);
 $token = getFlightToken($flight['id']); // Генерируем зашифрованный токен
 ?>
@@ -292,8 +292,8 @@ if($swd):?><span class="status-badge status-waiting-driver">данные вод�
 </div>
 </td>
 </tr>
-<tr id="details_<?= $flight['id'] ?>" style="display:none;"><td colspan="13" style="padding:0;"><div class="block-details"><table class="details-table"><thead><tr><th>ID ЗАЯВКИ</th><th>МАССА, КГ</th><th>ГРУЗООТПРАВИТЕЛЬ</th><th>АДРЕС ПОГРУЗКИ</th><th>КОНТАКТЫ</th><th>ДОГОВОР</th><th>ПРОПУСК</th><th>КОММЕНТАРИИ</th></tr></thead><tbody>
-<?php if(!empty($flight['zayavki'])):foreach($flight['zayavki'] as $zi):$mk=floatval($zi['mass_netto']??0)*1000;$pt=$zi['prep_time']??'';$cm=$zi['comments']??'';$dc=(is_numeric($pt)&&$pt>3)?'high':'';$contacts=trim((string)($zi['contacts']??''));
+<tr id="details_<?= $flight['id'] ?>" style="display:none;"><td colspan="13" style="padding:0;"><div class="block-details"><table class="details-table"><thead><tr><th>ID ЗАЯВКИ</th><th>МАССА БРУТТО, КГ</th><th>ГРУЗООТПРАВИТЕЛЬ</th><th>АДРЕС ПОГРУЗКИ</th><th>КОНТАКТЫ</th><th>ДОГОВОР</th><th>ПРОПУСК</th><th>КОММЕНТАРИИ</th></tr></thead><tbody>
+<?php if(!empty($flight['zayavki'])):foreach($flight['zayavki'] as $zi):$mk=floatval($zi['mass_brutto']??0)*1000;$pt=$zi['prep_time']??'';$cm=$zi['comments']??'';$dc=(is_numeric($pt)&&$pt>3)?'high':'';$contacts=trim((string)($zi['contacts']??''));
 $ch=$contacts!==''?nl2br(htmlspecialchars($contacts)):'<span class="empty-value">—</span>';?>
 <tr>
 <td class="text-center"><strong><?= htmlspecialchars($zi['zayavka_id']) ?></strong></td>
@@ -319,7 +319,7 @@ function showRequests(btn,ev){
         const d=JSON.parse(btn.dataset.requests);
         const w=window.open('','DeleteWindow','width=300,height=300,scrollbars=yes,resizable=yes');
         if(!w){alert('Разрешите всплывающие окна');return;}
-        let h='<html><head><meta charset="UTF-8"><title>Заявки</title><style>body{font-family:monospace;font-size:14px;margin:10px}table{width:100%;border-collapse:collapse}td{padding:3px 8px}</style></head><body><table><tbody>';
+        let h='<html><head><meta charset="UTF-8"><title>Заявки</title><style>body{font-family:monospace;font-size:14px;margin:10px}table{width:100%;border-collapse:collapse}th,td{padding:3px 8px;text-align:left}</style></head><body><table><thead><tr><th>Заявка</th><th>Масса брутто, т</th></tr></thead><tbody>';
         for(let i=0;i<d.length;i++)h+='<tr><td>'+d[i].id+'</td><td>'+d[i].weight+'</td></tr>';
         h+='</tbody></table></body></html>';w.document.write(h);w.document.close();w.focus();
     }catch(e){console.error(e);alert('Ошибка загрузки данных');}

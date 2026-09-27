@@ -1,10 +1,44 @@
 <?php
-require_once 'config.php';
+$configPath = basename(__DIR__) === 'feo'
+    ? __DIR__ . '/config.php'
+    : __DIR__ . '/feo/config.php';
+require_once $configPath;
 
-$flightId = isset($_REQUEST['id']) ? (int)$_REQUEST['id'] : 0;
+function decryptFlightIdToken(string $token): ?int
+{
+    try {
+        $method = 'AES-256-CBC';
+        $key = getenv('TIMELINE_TOKEN_KEY') ?: 'local-development-only';
+        $combined = strtr($token, '-_', '+/');
+        $padding = strlen($combined) % 4;
+        if ($padding !== 0) {
+            $combined .= str_repeat('=', 4 - $padding);
+        }
+        $decoded = base64_decode($combined, true);
+        if ($decoded === false) {
+            return null;
+        }
+        $ivLength = openssl_cipher_iv_length($method);
+        if (strlen($decoded) <= $ivLength) {
+            return null;
+        }
+        $iv = substr($decoded, 0, $ivLength);
+        $encrypted = substr($decoded, $ivLength);
+        $decrypted = openssl_decrypt($encrypted, $method, $key, 0, $iv);
+        $flightId = $decrypted !== false ? (int)$decrypted : 0;
+        return $flightId > 0 ? $flightId : null;
+    } catch (Throwable $e) {
+        return null;
+    }
+}
 
-if (!$flightId) {
-    die('Ошибка: не передан ID рейса');
+$token = trim((string)($_REQUEST['token'] ?? ''));
+if ($token === '') {
+    die('Ошибка: не передан токен доступа');
+}
+$flightId = decryptFlightIdToken($token);
+if ($flightId === null) {
+    die('Ошибка: недействительный токен доступа');
 }
 
 try {
@@ -27,10 +61,10 @@ if (empty($zayavkiIds) || $zayavkiIds[0] === '') {
 }
 
 $placeholders = implode(',', array_fill(0, count($zayavkiIds), '?'));
-$stmt = $pdo->prepare("SELECT zayavka_id, mass_netto, naim_oo_gruzootpravitel, mno_adres_pogruzki, mno_sh, mno_d, zakaz_s_ot_status 
-                        FROM feo 
-                        WHERE zayavka_id IN ($placeholders) 
-                        AND mno_sh IS NOT NULL 
+$stmt = $pdo->prepare("SELECT zayavka_id, mass_brutto, naim_oo_gruzootpravitel, mno_adres_pogruzki, mno_sh, mno_d, zakaz_s_ot_status
+                        FROM feo
+                        WHERE zayavka_id IN ($placeholders)
+                        AND mno_sh IS NOT NULL
                         AND mno_d IS NOT NULL
                         AND mno_sh != 0 
                         AND mno_d != 0");
@@ -56,7 +90,7 @@ foreach ($points as $p) {
         ];
     }
     $grouped[$key]['points'][] = $p;
-    $grouped[$key]['total_mass'] += $p['mass_netto'];
+    $grouped[$key]['total_mass'] += (float)($p['mass_brutto'] ?? 0);
     $grouped[$key]['count']++;
 }
 $groupedData = array_values($grouped);
@@ -174,7 +208,7 @@ if ($minLat == 999) {
     <div class="stats">
         <span class="stat">📦 Заявок: <?= count($points) ?></span>
         <span class="stat">📍 Адресов: <?= count($groupedData) ?></span>
-        <span class="stat">⚖️ Вес: <?= number_format($totalWeight, 0, ',', ' ') ?> кг</span>
+        <span class="stat">⚖️ Вес брутто: <?= number_format($totalWeight, 0, ',', ' ') ?> кг</span>
     </div>
     <div class="points-list">
         <?php foreach ($groupedData as $idx => $group): 
@@ -191,10 +225,10 @@ if ($minLat == 999) {
                 <div class="point-org"><?= htmlspecialchars(mb_substr($group['org'] ?? 'Не указан', 0, 60)) ?></div>
                 <div class="point-address">📍 <?= htmlspecialchars(mb_substr($group['address'] ?? 'Адрес не указан', 0, 80)) ?></div>
             </div>
-            <div class="point-weight"><?= number_format($weight, 0, ',', ' ') ?> кг</div>
+            <div class="point-weight"><?= number_format($weight, 0, ',', ' ') ?> кг брутто</div>
         </div>
         <?php endforeach; ?>
-        <div class="total-weight">📊 Общий вес: <?= number_format($totalWeight, 0, ',', ' ') ?> кг</div>
+        <div class="total-weight">📊 Общий вес брутто: <?= number_format($totalWeight, 0, ',', ' ') ?> кг</div>
     </div>
     <div class="footer">🔒 Нажмите на маркер или пункт списка</div>
 </div>
@@ -228,9 +262,9 @@ function createBalloonContent(group) {
     
     for (var i = 0; i < points.length; i++) {
         var p = points[i];
-        var weightKg = Math.round(p.mass_netto * 1000);
+        var weightKg = Math.round(Number(p.mass_brutto || 0) * 1000);
         pointsHtml += '<div style="border-top: 1px solid #eee; padding: 6px 0;' + (i === 0 ? 'border:none;padding-top:0;' : '') + '">' +
-            '<b>Заявка #' + p.zayavka_id + '</b> — ' + weightKg.toLocaleString() + ' кг<br>' +
+            '<b>Заявка #' + p.zayavka_id + '</b> — ' + weightKg.toLocaleString() + ' кг брутто<br>' +
             '<span style="font-size:11px;color:#555;">📦 ' + escapeHtml(p.zakaz_s_ot_status || 'Без статуса') + '</span>' +
             '</div>';
     }
@@ -245,7 +279,7 @@ function createBalloonContent(group) {
     return '<div style="padding:10px;max-width:300px;font-family:-apple-system, BlinkMacSystemFont, sans-serif;">' +
         warningHtml +
         '<b>📍 Заявк' + (isMultiple ? 'и' : 'а') + ' ' + idsStr + '</b><br>' +
-        '<b>Вес:</b> ' + totalWeightKg.toLocaleString() + ' кг<br>' +
+        '<b>Вес брутто:</b> ' + totalWeightKg.toLocaleString() + ' кг<br>' +
         '<b>Грузоотправитель:</b><br>' + escapeHtml(group.org || 'Не указан') + '<br>' +
         '<b>Адрес:</b><br>' + escapeHtml(group.address || 'Не указан') + '<br>' +
         '<div style="margin-top:8px;"><b>Состав:</b></div>' +
@@ -281,7 +315,7 @@ ymaps.ready(function() {
         
         var mark = new ymaps.Placemark([lat, lng], {
             balloonContent: createBalloonContent(group),
-            hintContent: isMultiple ? group.count + ' заявки, ' + weight + ' кг' : 'Заявка #' + group.points[0].zayavka_id + ', ' + weight + ' кг'
+            hintContent: isMultiple ? group.count + ' заявки, ' + weight + ' кг брутто' : 'Заявка #' + group.points[0].zayavka_id + ', ' + weight + ' кг брутто'
         }, {
             iconLayout: 'default#image',
             iconImageHref: createMarkerSVG(weight, isMultiple),

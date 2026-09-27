@@ -125,7 +125,7 @@ function getRouteMetrics(PDO $pdo, array $idList): array
     }
     $placeholders = implode(',', array_fill(0, count($idList), '?'));
     try {
-        $stmt = $pdo->prepare("SELECT COUNT(*) AS cnt, COALESCE(SUM(mass_netto), 0) AS sum_tons FROM feo WHERE zayavka_id IN ({$placeholders})");
+        $stmt = $pdo->prepare("SELECT COUNT(*) AS cnt, COALESCE(SUM(mass_brutto), 0) AS sum_tons FROM feo WHERE zayavka_id IN ({$placeholders})");
         if (!$stmt || !$stmt->execute($idList)) {
             return ['count' => 0, 'sum_tons' => 0.0];
         }
@@ -436,7 +436,7 @@ function buildLegalEntityLine(array $route): string
 
 function formatKgFromTons($tons): string
 {
-    return number_format((int)round((float)$tons * 1000), 0, '.', ' ') . ' кг';
+    return number_format((int)round((float)$tons * 1000), 0, '.', ' ') . ' кг брутто';
 }
 
 function compactDriverLabel(string $label): string

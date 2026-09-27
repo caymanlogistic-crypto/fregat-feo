@@ -137,6 +137,16 @@ const initialTrackers = Array.isArray(mapBootstrap.initialTrackers) ? mapBootstr
 const allTrackers = Array.isArray(mapBootstrap.allTrackers) ? mapBootstrap.allTrackers : [];
 const routeCardsMeta = (mapBootstrap.routeCardsMeta && typeof mapBootstrap.routeCardsMeta === 'object') ? mapBootstrap.routeCardsMeta : {};
 const foundRoutesData = Array.isArray(mapBootstrap.foundRoutesData) ? mapBootstrap.foundRoutesData : [];
+const massBasis = mapBootstrap.massBasis === 'mass_brutto' ? 'mass_brutto' : 'mass_netto';
+const isGrossMassView = massBasis === 'mass_brutto';
+const weightLabel = isGrossMassView ? '\u0412\u0435\u0441 \u0431\u0440\u0443\u0442\u0442\u043e' : UI.weight;
+const totalWeightLabel = isGrossMassView ? '\u041e\u0431\u0449\u0438\u0439 \u0432\u0435\u0441 \u0431\u0440\u0443\u0442\u0442\u043e' : UI.totalWeightLabel;
+const weightUnitLabel = isGrossMassView ? `${UI.kg} \u0431\u0440\u0443\u0442\u0442\u043e` : UI.kg;
+function getPointDisplayMass(point) {
+    if (!point || typeof point !== 'object') return 0;
+    if (point.display_mass !== undefined && point.display_mass !== null) return Number(point.display_mass) || 0;
+    return Number(point[massBasis] || 0);
+}
 const startedRoutesData = Array.isArray(mapBootstrap.startedRoutesData) ? mapBootstrap.startedRoutesData : [];
 const driversForSelect = Array.isArray(mapBootstrap.driversForSelect) ? mapBootstrap.driversForSelect : [];
 let currentDriversCatalog = Array.isArray(driversForSelect) ? driversForSelect.slice() : [];
@@ -690,7 +700,7 @@ function updateFlightModalSummary() {
             if (!group || !Array.isArray(group.points)) return;
             group.points.forEach(point => {
                 if (uniqueIds.includes(String(point.zayavka_id))) {
-                    totalTons += Number(point.mass_netto || 0);
+                    totalTons += getPointDisplayMass(point);
                 }
             });
         });
@@ -706,7 +716,7 @@ function updateFlightModalSummary() {
 
     summary.innerHTML = `
         <div><strong>${TXT.requestsCount}:</strong> ${uniqueIds.length}</div>
-        <div><strong>${TXT.totalWeight}:</strong> ${totalKg.toLocaleString('ru-RU')} ${UI.kg}</div>
+        <div><strong>${totalWeightLabel}:</strong> ${totalKg.toLocaleString('ru-RU')} ${weightUnitLabel}</div>
         <div><strong>${UI.modalCost}:</strong> ${formatRouteCost(costVal)} \u20BD</div>
         <div><strong>${UI.labelRouteType}:</strong> ${escapeHtml(getRouteTypeLabel(routeTypeValue, currentEditingMeta.unload_type || 'OO'))}</div>
         <div><strong>${UI.labelDriver}:</strong> ${escapeHtml(formatDriverCompactLabel(driverText))}</div>
@@ -901,15 +911,15 @@ function createBalloonContent(group) {
     let html = '<div class="custom-balloon">';
     if (group.count > 1) {
         html += `<h4>${UI.pin} ${TXT.requests} <span class="group-badge">${group.count} \u0448\u0442.</span></h4>`;
-        html += `<div class="info-row"><span class="info-label">${TXT.totalWeight}:</span> <strong>${totalWeightKg} ${UI.kg}</strong></div>`;
+        html += `<div class="info-row"><span class="info-label">${totalWeightLabel}:</span> <strong>${totalWeightKg} ${weightUnitLabel}</strong></div>`;
         html += `<div class="info-row"><span class="info-label">${TXT.sender}:</span> ${firstPoint.naim_oo_gruzootpravitel || TXT.notSpecified}</div>`;
         html += `<div class="info-row"><span class="info-label">${TXT.address}:</span> ${firstPoint.mno_adres_pogruzki || TXT.notSpecified}</div>`;
         if (group.in_flight && group.flight_status) { html += `<div class="info-row"><span class="info-label">${TXT.routeStatus}:</span> <span style="color: ${group.marker_color}; font-weight: bold;">${statusNames[group.flight_status] || group.flight_status}</span></div>`; if (group.flight_id) html += `<div class="info-row"><span class="info-label">${TXT.routeId}:</span> <strong>${group.flight_id}</strong></div>`; }
         else if (!group.in_flight) { if (group.custom_layer) html += `<div class="info-row"><span class="info-label">${TXT.category}:</span> <span style="color: ${group.marker_color}; font-weight: bold;">${group.custom_layer}</span></div>`; else html += `<div class="info-row"><span class="info-label">${TXT.status}:</span> <span style="color: #000; font-weight: bold;">${TXT.availableForPickup}</span></div>`; }
-        html += `<div class="points-list">`; group.points.forEach(p => html += `<div class="point-item"><span class="point-number">#${p.zayavka_id}</span><span class="point-weight">${Math.round(p.mass_netto * 1000)} ${UI.kg}</span></div>`); html += '</div>';
+        html += `<div class="points-list">`; group.points.forEach(p => html += `<div class="point-item"><span class="point-number">#${p.zayavka_id}</span><span class="point-weight">${Math.round(getPointDisplayMass(p) * 1000)} ${weightUnitLabel}</span></div>`); html += '</div>';
     } else {
         html += `<h4>${UI.pin} ${TXT.request} #${firstPoint.zayavka_id}</h4>`;
-        html += `<div class="info-row"><span class="info-label">${UI.weight}:</span> <strong>${totalWeightKg} ${UI.kg}</strong></div>`;
+        html += `<div class="info-row"><span class="info-label">${weightLabel}:</span> <strong>${totalWeightKg} ${weightUnitLabel}</strong></div>`;
         html += `<div class="info-row"><span class="info-label">${TXT.sender}:</span> ${firstPoint.naim_oo_gruzootpravitel || TXT.notSpecified}</div>`;
         html += `<div class="info-row"><span class="info-label">${TXT.address}:</span> ${firstPoint.mno_adres_pogruzki || TXT.notSpecified}</div>`;
         html += `<div class="info-row"><span class="info-label">${TXT.baseStatus}:</span> ${firstPoint.zakaz_s_ot_status || TXT.notSpecified}</div>`;
@@ -948,12 +958,12 @@ function updateSelectionUI() {
         }));
         const item = document.createElement('div');
         item.className = 'selected-item';
-        item.innerHTML = `<span>#${id}${UI.emDash}${w} ${UI.kg}</span><button onclick="removeSelectedId('${id}')">\u00D7</button>`;
+        item.innerHTML = `<span>#${id}${UI.emDash}${w} ${weightUnitLabel}</span><button onclick="removeSelectedId('${id}')">\u00D7</button>`;
         list.appendChild(item);
     });
     
     statsEl.textContent = `${TXT.requestsCount}: ${selectedOrder.length} | ${TXT.addressesCount}: ${uniqueAddresses.size}`;
-    totalEl.textContent = `${UI.totalWeightLabel}: ${totalW.toLocaleString('ru-RU')} ${UI.kg}`;
+    totalEl.textContent = `${totalWeightLabel}: ${totalW.toLocaleString('ru-RU')} ${weightUnitLabel}`;
     input.value = selectedOrder.join(', ');
     calcBtn.disabled = selectedOrder.length < 2;
     saveBtn.disabled = false;
@@ -2273,7 +2283,7 @@ function openStartConfirmModal(routeId, targetStatus = 'started') {
             <div><strong>\u0420\u0435\u0439\u0441 #${routeId}</strong></div>
             <div>\u0421\u0442\u0430\u0442\u0443\u0441: ${escapeHtml(statusNames[String(meta.status || '')] || String(meta.status || TXT.notSpecified))} \u2192 ${escapeHtml(statusNames[targetStatus] || targetStatus)}</div>
             <div>${TXT.requestsCount}: ${ids.length}</div>
-            <div>${TXT.totalWeight}: ${Math.round(totalKg).toLocaleString('ru-RU')} ${UI.kg}</div>
+            <div>${totalWeightLabel}: ${Math.round(totalKg).toLocaleString('ru-RU')} ${weightUnitLabel}</div>
             <div>${UI.labelDriver}: ${escapeHtml(previewContext.driver_compact)}</div>
             <div>\u041f\u0435\u0440\u0438\u043e\u0434: ${escapeHtml(previewContext.period)}</div>
         `;
@@ -2762,7 +2772,7 @@ function buildWarehouseBalloon(warehouse) {
         if (Array.isArray(stock.inbound_routes) && stock.inbound_routes.length > 0) {
             html += '<div style="margin-bottom:8px;"><strong style="color:#27ae60;">Поступления на склад:</strong>';
             stock.inbound_routes.forEach(function(r) {
-                html += `<div style="font-size:12px;margin:2px 0;">• Рейс #${r.flight_id} — ${escapeHtml(r.movement_label || r.movement_type)} — ${r.request_count} заяв. — ${Number(r.mass_netto_sum).toFixed(3)} т</div>`;
+                html += `<div style="font-size:12px;margin:2px 0;">• Рейс #${r.flight_id} — ${escapeHtml(r.movement_label || r.movement_type)} — ${r.request_count} заяв. — ${Number(r.mass_brutto_sum).toFixed(3)} т брутто</div>`;
             });
             html += '</div>';
         }
@@ -2770,7 +2780,7 @@ function buildWarehouseBalloon(warehouse) {
         if (Array.isArray(stock.outbound_routes) && stock.outbound_routes.length > 0) {
             html += '<div style="margin-bottom:8px;"><strong style="color:#e74c3c;">Списания со склада:</strong>';
             stock.outbound_routes.forEach(function(r) {
-                html += `<div style="font-size:12px;margin:2px 0;">• Рейс #${r.flight_id} — ${escapeHtml(r.movement_label || r.movement_type)} — ${r.request_count} заяв. — ${Number(r.mass_netto_sum).toFixed(3)} т</div>`;
+                html += `<div style="font-size:12px;margin:2px 0;">• Рейс #${r.flight_id} — ${escapeHtml(r.movement_label || r.movement_type)} — ${r.request_count} заяв. — ${Number(r.mass_brutto_sum).toFixed(3)} т брутто</div>`;
             });
             html += '</div>';
         }
@@ -2806,7 +2816,7 @@ function toggleWarehouseSelection(warehouseId) {
                 selectedOrder.push(zid);
                 addedCount++;
             }
-            var kg = Math.round(Number(req.mass_netto || 0) * 1000);
+            var kg = Math.round(getPointDisplayMass(req) * 1000);
             if (kg > 0) {
                 weightById[zid] = kg;
             }
@@ -2917,7 +2927,7 @@ async function loadWarehouseStock() {
                     wh.requests.forEach(function(req) {
                         var zid = String(req.zayavka_id || '').trim();
                         if (zid && !(zid in weightById)) {
-                            weightById[zid] = Math.round((req.mass_netto || 0) * 1000);
+                            weightById[zid] = Math.round(getPointDisplayMass(req) * 1000);
                         }
                     });
                 }
@@ -3080,8 +3090,11 @@ function loadPlannedRoutes() {
     if (startedContainer) {
         startedContainer.innerHTML = `<div class="route-list-empty">${TXT.loading}</div>`;
     }
-    const managerParam = managerScopeId ? `?manager_id=${encodeURIComponent(managerScopeId)}` : '';
-    return fetch(`map_files/get_planned_routes.php${managerParam}`).then(r => r.json()).then(data => {
+    const routeQuery = new URLSearchParams();
+    if (managerScopeId) routeQuery.set('manager_id', String(managerScopeId));
+    if (isGrossMassView) routeQuery.set('mass_basis', 'brutto');
+    const routeQueryString = routeQuery.toString();
+    return fetch(`map_files/get_planned_routes.php${routeQueryString ? `?${routeQueryString}` : ''}`).then(r => r.json()).then(data => {
         if (data && Array.isArray(data.routes)) {
             data.routes.forEach((route) => {
                 if (!route || route.id === undefined || route.id === null) return;
@@ -3109,7 +3122,7 @@ function loadPlannedRoutes() {
                     <div class="route-item route-item-planned" onclick="selectRoute('${r.zayavki_ids}', '${routeCost || ''}', this)" ondblclick="openFlightEditModal(${r.id}, 'planned')" data-route-id="${r.id}" data-route-source="planned" data-route-editable="1">
                         <div class="route-head"><div class="route-name">#${r.id} ${resolveRouteTitle(r) || (UI.routePrefix + r.id)}</div>${buildRouteManageMenu(r.id, 'planned')}</div>
                         <div class="route-meta route-timeline">${driverLine}</div>
-                        <div class="route-meta route-metrics">${zayCount} \u0437\u0430\u044f\u0432.${UI.bullet}${Math.round(totalKg).toLocaleString('ru-RU')} ${UI.kg}${costPart}${unloadPart}</div>
+                        <div class="route-meta route-metrics">${zayCount} \u0437\u0430\u044f\u0432.${UI.bullet}${Math.round(totalKg).toLocaleString('ru-RU')} ${weightUnitLabel}${costPart}${unloadPart}</div>
                     </div>
                 `;
             }).join('');
@@ -3140,7 +3153,7 @@ function loadPlannedRoutes() {
                         <div class="route-item route-item-found" onclick="selectRoute('${r.zayavki_ids}', '${routeCost || ''}', this)" ondblclick="openFlightEditModal(${r.id}, 'found')" data-route-id="${r.id}" data-route-source="found" data-route-editable="1">
                             <div class="route-head"><div class="route-name">#${r.id} ${resolveRouteTitle(r) || (UI.routePrefix + r.id)}</div>${buildRouteManageMenu(r.id, 'found')}</div>
                             <div class="route-meta route-timeline">${driverLine}</div>
-                            <div class="route-meta route-metrics">${zayCount} \u0437\u0430\u044f\u0432.${UI.bullet}${Math.round(totalKg).toLocaleString('ru-RU')} ${UI.kg}${costPart}${unloadPart}</div>
+                            <div class="route-meta route-metrics">${zayCount} \u0437\u0430\u044f\u0432.${UI.bullet}${Math.round(totalKg).toLocaleString('ru-RU')} ${weightUnitLabel}${costPart}${unloadPart}</div>
                         </div>
                     `;
                 }).join('');
@@ -3166,7 +3179,7 @@ function loadPlannedRoutes() {
                         <div class="route-item route-item-started" onclick="selectRoute('${r.zayavki_ids}', '${routeCost || ''}', this)" ondblclick="openFlightEditModal(${r.id}, 'started')" data-route-id="${r.id}" data-route-source="started" data-route-editable="1">
                             <div class="route-head"><div class="route-name">#${r.id} ${resolveRouteTitle(r) || (UI.routePrefix + r.id)}</div>${buildRouteManageMenu(r.id, 'started')}</div>
                             <div class="route-meta route-timeline">${driverLine}</div>
-                            <div class="route-meta route-metrics">${zayCount} \u0437\u0430\u044f\u0432.${UI.bullet}${Math.round(totalKg).toLocaleString('ru-RU')} ${UI.kg}${costPart}${unloadPart}</div>
+                            <div class="route-meta route-metrics">${zayCount} \u0437\u0430\u044f\u0432.${UI.bullet}${Math.round(totalKg).toLocaleString('ru-RU')} ${weightUnitLabel}${costPart}${unloadPart}</div>
                         </div>
                     `;
                 }).join('');
@@ -3478,7 +3491,7 @@ function init() {
     map.geoObjects.add(warehousesCollection);
     map.geoObjects.add(trackersCollection);
     
-    groupsData.forEach(group => group.points.forEach(p => weightById[p.zayavka_id] = Math.round(p.mass_netto * 1000)));
+    groupsData.forEach(group => group.points.forEach(p => weightById[p.zayavka_id] = Math.round(getPointDisplayMass(p) * 1000)));
     
     // === INITIALIZE REQUEST MARKERS ===
     groupsData.forEach(group => {
@@ -3486,7 +3499,7 @@ function init() {
             [parseFloat(group.mno_d), parseFloat(group.mno_sh)],
             {
                 balloonContent: createBalloonContent(group),
-                hintContent: group.count > 1 ? `${UI.group}: ${Math.round(group.total_mass * 1000)} ${UI.kg}` : `${TXT.request}: ${Math.round(group.total_mass * 1000)} ${UI.kg}`,
+                hintContent: group.count > 1 ? `${UI.group}: ${Math.round(group.total_mass * 1000)} ${weightUnitLabel}` : `${TXT.request}: ${Math.round(group.total_mass * 1000)} ${weightUnitLabel}`,
                 groupData: group
             },
             {

@@ -11,7 +11,7 @@ class FeoRepository
     public function fetchPointsWithCoords()
     {
         try {
-            $stmt = $this->pdo->query("SELECT zayavka_id, mass_netto, naim_oo_gruzootpravitel, mno_adres_pogruzki, mno_sh, mno_d, zakaz_s_ot_status, gruzopoluchatel, adres_dostavki_otkhodov, data_sozdaniya_porucheniya FROM feo WHERE mno_sh IS NOT NULL AND mno_d IS NOT NULL");
+            $stmt = $this->pdo->query("SELECT zayavka_id, mass_netto, mass_brutto, naim_oo_gruzootpravitel, mno_adres_pogruzki, mno_sh, mno_d, zakaz_s_ot_status, gruzopoluchatel, adres_dostavki_otkhodov, data_sozdaniya_porucheniya FROM feo WHERE mno_sh IS NOT NULL AND mno_d IS NOT NULL");
             if (!$stmt) {
                 mapError('FeoRepository query returned false');
                 return [];
@@ -49,7 +49,7 @@ class FeoRepository
         }
     }
 
-    public function getMassByZayavkaIds(array $zayavkaIds)
+    public function getMassByZayavkaIds(array $zayavkaIds, string $massField = 'mass_netto')
     {
         $normalized = [];
         foreach ($zayavkaIds as $id) {
@@ -63,8 +63,9 @@ class FeoRepository
             return [];
         }
 
+        $massField = $massField === 'mass_brutto' ? 'mass_brutto' : 'mass_netto';
         $placeholders = implode(',', array_fill(0, count($normalized), '?'));
-        $sql = "SELECT zayavka_id, mass_netto FROM feo WHERE zayavka_id IN ({$placeholders})";
+        $sql = "SELECT zayavka_id, {$massField} AS display_mass FROM feo WHERE zayavka_id IN ({$placeholders})";
 
         try {
             $stmt = $this->pdo->prepare($sql);
@@ -91,7 +92,7 @@ class FeoRepository
                 if ($id === '') {
                     continue;
                 }
-                $massMap[$id] = isset($row['mass_netto']) ? (float)$row['mass_netto'] : 0.0;
+                $massMap[$id] = isset($row['display_mass']) ? (float)$row['display_mass'] : 0.0;
             }
             return $massMap;
         } catch (Throwable $e) {
@@ -115,7 +116,7 @@ class FeoRepository
         }
 
         $placeholders = implode(',', array_fill(0, count($normalized), '?'));
-        $sql = "SELECT zayavka_id, mass_netto, mno_adres_pogruzki FROM feo WHERE zayavka_id IN ({$placeholders})";
+        $sql = "SELECT zayavka_id, mass_netto, mass_brutto, mno_adres_pogruzki FROM feo WHERE zayavka_id IN ({$placeholders})";
 
         try {
             $stmt = $this->pdo->prepare($sql);
@@ -143,6 +144,7 @@ class FeoRepository
                 }
                 $result[$id] = [
                     'mass_netto' => isset($row['mass_netto']) ? (float)$row['mass_netto'] : 0.0,
+                    'mass_brutto' => isset($row['mass_brutto']) ? (float)$row['mass_brutto'] : 0.0,
                     'mno_adres_pogruzki' => trim((string)($row['mno_adres_pogruzki'] ?? '')),
                 ];
             }

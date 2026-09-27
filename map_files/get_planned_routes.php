@@ -39,14 +39,15 @@ function normalizeRouteType($routeTypeRaw, $unloadTypeRaw = 'OO'): string
         : 'generator_to_utilizer';
 }
 
-function getTotalKgByIds(PDO $pdo, array $ids): float
+function getTotalKgByIds(PDO $pdo, array $ids, string $massField = 'mass_netto'): float
 {
     if (empty($ids)) {
         return 0.0;
     }
 
+    $massField = $massField === 'mass_brutto' ? 'mass_brutto' : 'mass_netto';
     $placeholders = implode(',', array_fill(0, count($ids), '?'));
-    $stmt = $pdo->prepare("SELECT COALESCE(SUM(COALESCE(mass_netto, 0) * 1000), 0) AS total_kg FROM feo WHERE zayavka_id IN ($placeholders)");
+    $stmt = $pdo->prepare("SELECT COALESCE(SUM(COALESCE({$massField}, 0) * 1000), 0) AS total_kg FROM feo WHERE zayavka_id IN ($placeholders)");
     if (!$stmt) {
         return 0.0;
     }
@@ -65,6 +66,7 @@ try {
     }
 
     $managerId = isset($_GET['manager_id']) ? (int)$_GET['manager_id'] : 0;
+    $massField = (($_GET['mass_basis'] ?? '') === 'brutto') ? 'mass_brutto' : 'mass_netto';
 
     $columnsStmt = $pdo->query('SHOW COLUMNS FROM flights');
     $columns = $columnsStmt ? $columnsStmt->fetchAll(PDO::FETCH_COLUMN) : [];
@@ -189,7 +191,7 @@ try {
             'actual_start_date' => $row['actual_start_date'] ?? null,
             'actual_end_date' => $row['actual_end_date'] ?? null,
             'assigned_manager_id' => isset($row['assigned_manager_id']) ? (int)$row['assigned_manager_id'] : null,
-            'total_kg' => getTotalKgByIds($pdo, $zayIds),
+            'total_kg' => getTotalKgByIds($pdo, $zayIds, $massField),
         ];
 
         if ($normalized['status'] === 'found') {
