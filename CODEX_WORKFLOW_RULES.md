@@ -1016,6 +1016,8 @@ New rule: One server command at a time; block when sessions are overloaded.
 
 The canonical autodeploy implementation is `.github/workflows/deploy-production.yml` in the private repository `caymanlogistic-crypto/fregat-feo`. Before relying on autodeploy, ROO/Codex must verify that the workflow exists, that a GitHub Actions run was created for the exact pushed SHA, and that the run completed successfully. Waiting for files without checking the Actions run is not valid deploy verification.
 
+Temporary quota fallback: only after an explicit OWNER instruction for LOCAL PUBLISH, an agent may run `local/Publish-FregatProduction.ps1 -ExpectedSha <full origin/main SHA> -OwnerApproved`. This is the only permitted fallback while GitHub-hosted Actions are unavailable. It must run from a clean local `main` equal to `origin/main`; it reuses the same server lock, backup, lint, checksum and rollback. Raw/manual SCP remains forbidden. When GitHub Actions becomes available again, set repository variable `FREGAT_ACTIONS_DEPLOY_ENABLED=true` and stop using the fallback unless OWNER authorizes it again.
+
 Autodeploy copies changed runtime files only. It never runs database migrations, never deploys `map2.php`, never deploys configuration/secrets/dumps, and never deletes production files. Database migrations remain a separate explicitly authorized production action after the migration file has been delivered and verified.
 
 After ROO/Codex performs a local `git push origin main`, it MUST NOT immediately report the task as completed.
