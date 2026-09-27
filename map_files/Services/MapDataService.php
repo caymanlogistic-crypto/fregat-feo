@@ -6,14 +6,19 @@ class MapDataService
     private $feoRepository;
     private $statusColors;
     private $statusNames;
+    private $displayMassField;
 
-    public function __construct($flightRepository, $statusBlockRepository, $feoRepository, $statusColors, $statusNames)
+    public function __construct($flightRepository, $statusBlockRepository, $feoRepository, $statusColors, $statusNames, $displayMassField = null)
     {
         $this->flightRepository = $flightRepository;
         $this->statusBlockRepository = $statusBlockRepository;
         $this->feoRepository = $feoRepository;
         $this->statusColors = $statusColors;
         $this->statusNames = $statusNames;
+        $entryPoint = basename((string)($_SERVER['SCRIPT_NAME'] ?? $_SERVER['PHP_SELF'] ?? ''));
+        $this->displayMassField = $displayMassField === 'mass_brutto' || ($displayMassField === null && $entryPoint === 'map2.php')
+            ? 'mass_brutto'
+            : 'mass_netto';
     }
 
     public function build()
@@ -37,6 +42,8 @@ class MapDataService
             }
             $point['zayavka_id'] = $zayavkaId;
             $point['mass_netto'] = isset($point['mass_netto']) ? (float)$point['mass_netto'] : 0;
+            $point['mass_brutto'] = isset($point['mass_brutto']) ? (float)$point['mass_brutto'] : 0;
+            $point['display_mass'] = $point[$this->displayMassField];
             $point['mno_sh'] = $point['mno_sh'] ?? null;
             $point['mno_d'] = $point['mno_d'] ?? null;
             $point['naim_oo_gruzootpravitel'] = mapNormalizeText((string)($point['naim_oo_gruzootpravitel'] ?? ''));
@@ -112,7 +119,7 @@ class MapDataService
                 'utilizer_color_text' => $p['utilizer_color_text'],
                 'utilizer_match_key' => $p['utilizer_match_key'],
                 'points' => [$p],
-                'total_mass' => $p['mass_netto'],
+                'total_mass' => $p['display_mass'],
                 'count' => 1,
                 'group_key' => $key,
             ];
@@ -126,7 +133,7 @@ class MapDataService
 
                 if (canMergePoints($p, $o)) {
                     $groupedPoints[$key]['points'][] = $o;
-                    $groupedPoints[$key]['total_mass'] += $o['mass_netto'];
+                    $groupedPoints[$key]['total_mass'] += $o['display_mass'];
                     $groupedPoints[$key]['count']++;
                     $processed[$j] = $key;
                 }

@@ -1,4 +1,47 @@
 <?php
+$entryPoint = basename((string)($_SERVER['SCRIPT_NAME'] ?? $_SERVER['PHP_SELF'] ?? ''));
+$displayMassField = $entryPoint === 'map2.php' ? 'mass_brutto' : 'mass_netto';
+if ($displayMassField === 'mass_brutto' && isset($routeInfoMap) && is_array($routeInfoMap)) {
+    $applyGrossMassToRouteCard = static function (array $card) use ($routeInfoMap): array {
+        $sumTons = 0.0;
+        foreach (explode(',', (string)($card['zayavki_ids'] ?? '')) as $zid) {
+            $zid = trim($zid);
+            if ($zid !== '' && isset($routeInfoMap[$zid]) && is_array($routeInfoMap[$zid])) {
+                $sumTons += (float)($routeInfoMap[$zid]['mass_brutto'] ?? 0);
+            }
+        }
+        $card['total_kg'] = (int)round($sumTons * 1000);
+
+        $hasExplicitTitle = trim((string)($card['name'] ?? '')) !== ''
+            || trim((string)($card['comment'] ?? '')) !== ''
+            || trim((string)($card['route_name'] ?? '')) !== ''
+            || trim((string)($card['direction'] ?? '')) !== '';
+        if (!$hasExplicitTitle && $sumTons > 0) {
+            $title = trim((string)($card['route_title'] ?? $card['title'] ?? ''));
+            $prefix = trim((string)preg_replace('/\s*\d+(?:[.,]\d+)?\s*тн$/ui', '', $title));
+            $tonsRounded = round($sumTons, 1);
+            $tonsText = rtrim(rtrim(number_format($tonsRounded, 1, '.', ''), '0'), '.') . 'тн';
+            $title = trim($prefix . ' ' . $tonsText);
+            $card['route_title'] = $title;
+            $card['title'] = $title;
+        }
+        return $card;
+    };
+
+    foreach ($routeCardsMeta as $routeId => $card) {
+        if (is_array($card)) {
+            $routeCardsMeta[$routeId] = $applyGrossMassToRouteCard($card);
+        }
+    }
+    foreach ($foundRoutesData as $index => $card) {
+        if (is_array($card)) {
+            $foundRoutesData[$index] = $applyGrossMassToRouteCard($card);
+        }
+    }
+    $routeCardsMetaJson = json_encode($routeCardsMeta, JSON_UNESCAPED_UNICODE) ?: '{}';
+    $foundRoutesJson = json_encode($foundRoutesData, JSON_UNESCAPED_UNICODE) ?: '[]';
+}
+
 $jsPath = __DIR__ . '/../assets/maptest.js';
 $jsVersion = @filemtime($jsPath);
 if ($jsVersion === false) {
@@ -47,6 +90,7 @@ window.MAP_BOOTSTRAP = {
     statusNames: <?= json_encode($statusNames, JSON_UNESCAPED_UNICODE) ?>,
     uiTexts: <?= json_encode($uiTexts ?? [], JSON_UNESCAPED_UNICODE) ?>,
     uiPopupTemplates: <?= json_encode($uiPopupTemplates ?? [], JSON_UNESCAPED_UNICODE) ?>,
+    massBasis: <?= json_encode($displayMassField) ?>,
     groupsData: <?= json_encode($processedGroups, JSON_UNESCAPED_UNICODE) ?>,
     flightStatusList: <?= json_encode($flightStatusList, JSON_UNESCAPED_UNICODE) ?>,
     customLayers: <?= json_encode($customLayers, JSON_UNESCAPED_UNICODE) ?>

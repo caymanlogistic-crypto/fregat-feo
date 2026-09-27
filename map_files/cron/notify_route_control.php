@@ -27,7 +27,7 @@ function fmtDateShort($value): string
 
 function fmtKg($tons): string
 {
-    return number_format((int)round((float)$tons * 1000), 0, '.', ' ') . ' кг';
+    return number_format((int)round((float)$tons * 1000), 0, '.', ' ') . ' кг брутто';
 }
 
 function compactDriver(string $label): string
@@ -139,7 +139,7 @@ try {
                f.planned_start_date_from, f.planned_start_date_to,
                COALESCE(f.zayavki_count, 0) AS zayavki_count,
                d.vehicle_make_plate, d.full_name,
-               (SELECT COALESCE(SUM(COALESCE(mass_netto,0)),0) FROM feo WHERE FIND_IN_SET(zayavka_id, f.zayavki_ids) > 0) AS sum_tons,
+               (SELECT COALESCE(SUM(COALESCE(mass_brutto,0)),0) FROM feo WHERE FIND_IN_SET(zayavka_id, f.zayavki_ids) > 0) AS sum_tons,
                {$sourceWarehouseNameSelect} AS source_warehouse_name,
                {$destWarehouseNameSelect} AS destination_warehouse_name
         FROM flights f
