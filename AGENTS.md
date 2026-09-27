@@ -33,6 +33,8 @@
 
 Production-доставка выполняется workflow `.github/workflows/deploy-production.yml` после push в `main`. Workflow доставляет только изменённые runtime-файлы, не удаляет серверные файлы и не запускает миграции БД. Статус GitHub Actions и фактический server-side SHA должны быть проверены до любых следующих production-действий.
 
+Если OWNER явно объявил временный LOCAL PUBLISH из-за недоступности GitHub-hosted Actions, разрешён только `local/Publish-FregatProduction.ps1 -ExpectedSha <полный origin/main SHA> -OwnerApproved`. Скрипт сохраняет exact-candidate, changed-files-only, server lock, backup, lint, checksum и rollback. Обычный ручной SCP остаётся запрещён. После восстановления Actions переменная `FREGAT_ACTIONS_DEPLOY_ENABLED` возвращается в `true`, а временный LOCAL PUBLISH снова требует нового явного разрешения OWNER.
+
 Если локальная возможность отсутствует или Docker CLI зависает, не переустанавливай и не перезапускай общую среду. Останови только собственный диагностический процесс, зафиксируй факт и сообщи OWNER.
 
 При конфликте правил эта страница и актуальная Notion-страница `00 — START HERE — LEGACY FREGAT FEO` имеют приоритет над историческими локальными путями и общими инструкциями в `CODEX_WORKFLOW_RULES.md`.

@@ -15,6 +15,7 @@ permissions:
 
 jobs:
   deploy:
+    if: ${{ vars.FREGAT_ACTIONS_DEPLOY_ENABLED != 'false' }}
     name: Deploy changed runtime files
     runs-on: ubuntu-latest
     environment: production
