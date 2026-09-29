@@ -14,6 +14,12 @@ is_deployable() {
     local path="$1"
 
     case "$path" in
+        map8000_data/requests.xlsx|map8000_data/.htaccess)
+            return 0
+            ;;
+    esac
+
+    case "$path" in
         map2.php|*/config.php|config.php|*.example.php|*.sql|*.log|*.gz|*.bak|*.backup|*.tmp|*.cache)
             return 1
             ;;
