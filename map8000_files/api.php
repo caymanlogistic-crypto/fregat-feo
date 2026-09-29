@@ -57,7 +57,7 @@ try {
     }
 
     $raw = file_get_contents('php://input');
-    if (strlen((string)$raw) > 20 * 1024 * 1024) {
+    if (strlen((string)$raw) > 128 * 1024 * 1024) {
         map8000Json(['success' => false, 'message' => 'Запрос слишком большой.'], 413);
     }
     $payload = json_decode((string)$raw, true);
@@ -165,10 +165,6 @@ function map8000NormalizeRequests(mixed $source): array
     if (!is_array($source) || $source === []) {
         throw new InvalidArgumentException('Добавьте хотя бы одну заявку.');
     }
-    if (count($source) > 1000) {
-        throw new InvalidArgumentException('В одном рейсе допускается не более 1000 заявок.');
-    }
-
     $result = [];
     $seen = [];
     foreach ($source as $request) {
