@@ -15,6 +15,7 @@ const routePalette = [
     '#dc2626', '#16a34a', '#7c3aed', '#ea580c', '#0891b2', '#c026d3',
     '#4f46e5', '#65a30d', '#be123c', '#0f766e', '#9333ea', '#ca8a04'
 ];
+const selectedMarkerColor = '#7c3aed';
 
 let requests = [];
 let requestById = new Map();
@@ -58,8 +59,6 @@ function bindUi() {
     document.addEventListener('click', event => {
         const addButton = event.target.closest('[data-add-request]');
         if (addButton) addRequest(addButton.dataset.addRequest);
-        const addGroupButton = event.target.closest('[data-add-group]');
-        if (addGroupButton) addGroup(addGroupButton.dataset.addGroup);
         const removeButton = event.target.closest('[data-remove-request]');
         if (removeButton) removeRequest(removeButton.dataset.removeRequest);
         const editButton = event.target.closest('[data-edit-request]');
@@ -97,13 +96,10 @@ function initMap() {
         controls: ['zoomControl', 'fullscreenControl', 'typeSelector']
     });
     objectManager = new ymaps.ObjectManager({
-        clusterize: true,
-        gridSize: 64,
-        clusterDisableClickZoom: false,
+        clusterize: false,
         geoObjectOpenBalloonOnClick: true
     });
     objectManager.objects.options.set({preset: 'islands#blueCircleDotIcon'});
-    objectManager.clusters.options.set({preset: 'islands#blueClusterIcons'});
     map.geoObjects.add(objectManager);
     savedRouteMarkerManager = new ymaps.ObjectManager({clusterize: false});
     map.geoObjects.add(savedRouteMarkerManager);
@@ -215,40 +211,24 @@ function renderMarkers(filtered) {
     if (!objectManager) return;
     const memberships = buildRouteMembershipMap();
     const selectedIds = new Set(selected.map(item => String(item.id)));
-    const groups = new Map();
-    filtered.forEach(request => {
-        const key = `${Number(request.latitude).toFixed(6)},${Number(request.longitude).toFixed(6)}`;
-        if (!groups.has(key)) groups.set(key, []);
-        groups.get(key).push(request);
-    });
-    const features = [];
-    let featureId = 1;
-    groups.forEach((items, key) => {
-        const first = items[0];
-        const shown = items.slice(0, 50);
-        const body = shown.map(item => {
-            const isSelected = selectedIds.has(String(item.id));
-            const routeTags = (memberships.get(String(item.id)) || []).map(route => `<span class="balloon-route-tag"><span class="color-dot" style="--route-color:${routeColor(route.id)}"></span>Рейс №${Number(route.id)}</span>`).join('');
-            return `<div class="balloon-request"><div><strong>${escapeHtml(item.id)}</strong> · ${formatWeight(item.weight_t)}<br>${escapeHtml(item.address)}${routeTags ? `<div class="balloon-route-tags">${routeTags}</div>` : ''}</div><button type="button" data-add-request="${escapeAttribute(item.id)}" ${isSelected ? 'disabled' : ''}>${isSelected ? 'Добавлено' : 'Добавить'}</button></div>`;
-        }).join('');
-        const groupRouteIds = [];
-        items.forEach(item => (memberships.get(String(item.id)) || []).forEach(route => {
-            const routeId = Number(route.id);
-            if (!groupRouteIds.includes(routeId)) groupRouteIds.push(routeId);
-        }));
-        const hasCurrentSelection = items.some(item => selectedIds.has(String(item.id)));
-        const markerColor = groupRouteIds.length ? routeColor(groupRouteIds[0]) : (hasCurrentSelection ? '#f59e0b' : '#2563eb');
-        features.push({
+    const features = filtered.map((request, index) => {
+        const requestId = String(request.id);
+        const isSelected = selectedIds.has(requestId);
+        const requestRoutes = memberships.get(requestId) || [];
+        const routeTags = requestRoutes.map(route => `<span class="balloon-route-tag"><span class="color-dot" style="--route-color:${routeColor(route.id)}"></span>Рейс №${Number(route.id)}</span>`).join('');
+        const markerColor = isSelected
+            ? selectedMarkerColor
+            : (requestRoutes.length ? routeColor(requestRoutes[0].id) : '#2563eb');
+        return {
             type: 'Feature',
-            id: featureId++,
-            geometry: {type: 'Point', coordinates: [Number(first.latitude), Number(first.longitude)]},
+            id: `request-${requestId}-${index}`,
+            geometry: {type: 'Point', coordinates: [Number(request.latitude), Number(request.longitude)]},
             properties: {
-                iconCaption: items.length > 1 ? String(items.length) : '',
-                balloonContentHeader: `${escapeHtml(first.address)} · ${items.length} заявок`,
-                balloonContentBody: `<button class="balloon-add-all" type="button" data-add-group="${escapeAttribute(key)}">Добавить все заявки точки</button>${body}${items.length > shown.length ? `<div class="muted">Ещё ${items.length - shown.length} заявок в этой точке.</div>` : ''}`
+                balloonContentHeader: escapeHtml(request.address || request.id),
+                balloonContentBody: `<div class="balloon-request"><div><strong>${escapeHtml(request.id)}</strong> · ${formatWeight(request.weight_t)}${routeTags ? `<div class="balloon-route-tags">${routeTags}</div>` : ''}</div><button type="button" data-add-request="${escapeAttribute(request.id)}" ${isSelected ? 'disabled' : ''}>${isSelected ? 'Добавлено' : 'Добавить'}</button></div>`
             },
             options: {preset: 'islands#circleDotIcon', iconColor: markerColor}
-        });
+        };
     });
     objectManager.removeAll();
     objectManager.add({type: 'FeatureCollection', features});
@@ -257,27 +237,26 @@ function renderMarkers(filtered) {
 
 function renderSavedRouteMarkers() {
     if (!savedRouteMarkerManager) return;
+    const selectedIds = new Set(selected.map(item => String(item.id)));
     const features = [];
     routes.forEach(route => {
-        const routePoints = new Map();
-        (Array.isArray(route.requests) ? route.requests : []).forEach(request => {
-            const key = `${Number(request.latitude).toFixed(6)},${Number(request.longitude).toFixed(6)}`;
-            if (!routePoints.has(key)) routePoints.set(key, []);
-            routePoints.get(key).push(request);
-        });
-        routePoints.forEach((items, key) => {
-            const first = items[0];
+        (Array.isArray(route.requests) ? route.requests : []).forEach((request, index) => {
+            const requestId = String(request.id);
             features.push({
                 type: 'Feature',
-                id: `route-${Number(route.id)}-${key}`,
-                geometry: {type: 'Point', coordinates: [Number(first.latitude), Number(first.longitude)]},
+                id: `route-${Number(route.id)}-${requestId}-${index}`,
+                geometry: {type: 'Point', coordinates: [Number(request.latitude), Number(request.longitude)]},
                 properties: {
                     iconCaption: `№${Number(route.id)}`,
                     hintContent: `Рейс №${Number(route.id)}: ${escapeHtml(route.name || '')}`,
                     balloonContentHeader: `Рейс №${Number(route.id)} ${escapeHtml(route.name || '')}`,
-                    balloonContentBody: `${items.length} заявок в точке<br>${escapeHtml(first.address || '')}`
+                    balloonContentBody: `<strong>${escapeHtml(request.id)}</strong> · ${formatWeight(request.weight_t)}<br>${escapeHtml(request.address || '')}`
                 },
-                options: {preset: 'islands#circleDotIcon', iconColor: routeColor(route.id), zIndex: 1000}
+                options: {
+                    preset: 'islands#circleDotIcon',
+                    iconColor: selectedIds.has(requestId) ? selectedMarkerColor : routeColor(route.id),
+                    zIndex: 1000
+                }
             });
         });
     });
@@ -300,14 +279,6 @@ function buildRouteMembershipMap() {
 function routeColor(routeId) {
     const numericId = Math.max(1, Number(routeId) || 1);
     return routePalette[(numericId - 1) % routePalette.length];
-}
-
-function addGroup(groupKey) {
-    const [lat, lon] = String(groupKey).split(',').map(Number);
-    requests.filter(request => Number(request.latitude).toFixed(6) === lat.toFixed(6)
-        && Number(request.longitude).toFixed(6) === lon.toFixed(6)).forEach(request => addRequest(request.id, false));
-    renderSelected();
-    applyFilters();
 }
 
 function addRequest(id, rerender = true) {
@@ -545,8 +516,8 @@ function renderRoutes() {
 function renderRouteLegend() {
     const container = document.getElementById('route-color-legend');
     if (!container) return;
-    const selectedLegend = selected.length && !editingRouteId
-        ? '<div class="legend-item"><span class="color-dot" style="--route-color:#f59e0b"></span><span>Выбрано в новый рейс</span></div>'
+    const selectedLegend = selected.length
+        ? `<div class="legend-item"><span class="color-dot" style="--route-color:${selectedMarkerColor}"></span><span>Выбранные заявки</span></div>`
         : '';
     const routeItems = routes.map(route => `<div class="legend-item"><span class="color-dot" style="--route-color:${routeColor(route.id)}"></span><span>Рейс №${Number(route.id)} ${escapeHtml(route.name || '')}</span></div>`).join('');
     container.innerHTML = selectedLegend + routeItems;
