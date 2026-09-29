@@ -23,6 +23,10 @@
 /saved_data/
 /storage/
 /uploads/
+/map8000_data/routes.json
+/map8000_data/routes.json.lock
+/map8000_data/requests-cache.json
+/map8000_data/requests-cache.json.tmp-*
 
 # Server deployment artefacts and duplicate staging copies
 /.deploy_backups/
