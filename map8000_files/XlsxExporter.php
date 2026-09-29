@@ -15,7 +15,8 @@ final class Map8000XlsxExporter
         }
 
         $summary = [[
-            'ID рейса', 'Название', 'Дата', 'Конечный город', 'Заявок', 'Вес, т',
+            'ID рейса', 'Название', 'Дата', 'Конечный город', 'Категория ФККО',
+            'Заявок категории', 'Вес категории, т', 'Всего заявок рейса', 'Общий вес рейса, т',
             'Расстояние, км', 'Время, мин', 'Источник расстояния', 'Транспорт',
             'Водитель', 'Примечание', 'Создан', 'Изменён',
         ]];
@@ -38,22 +39,44 @@ final class Map8000XlsxExporter
                 static fn(float $sum, array $request): float => $sum + (float)($request['weight_t'] ?? 0),
                 0.0
             );
-            $summary[] = [
-                (int)($route['id'] ?? 0),
-                (string)($route['name'] ?? ''),
-                (string)($route['date'] ?? ''),
-                (string)($route['destination_label'] ?? $route['destination'] ?? ''),
-                count($requests),
-                round($totalWeight, 6),
-                round((float)($route['distance_km'] ?? 0), 2),
-                (int)round((float)($route['duration_min'] ?? 0)),
-                (string)($route['distance_source'] ?? ''),
-                (string)($route['vehicle'] ?? ''),
-                (string)($route['driver'] ?? ''),
-                (string)($route['notes'] ?? ''),
-                (string)($route['created_at'] ?? ''),
-                (string)($route['updated_at'] ?? ''),
-            ];
+            $hasDistance = (float)($route['distance_km'] ?? 0) > 0
+                && (string)($route['distance_source'] ?? '') !== 'Не рассчитывалось';
+            foreach (['АКБ', 'Лампы', 'Прочее'] as $category) {
+                $categoryRequests = array_values(array_filter(
+                    $requests,
+                    static function (array $request) use ($category): bool {
+                        $requestCategory = trim((string)($request['category'] ?? ''));
+                        if ($category === 'Прочее') {
+                            return !in_array($requestCategory, ['АКБ', 'Лампы'], true);
+                        }
+                        return $requestCategory === $category;
+                    }
+                ));
+                $categoryWeight = array_reduce(
+                    $categoryRequests,
+                    static fn(float $sum, array $request): float => $sum + (float)($request['weight_t'] ?? 0),
+                    0.0
+                );
+                $summary[] = [
+                    (int)($route['id'] ?? 0),
+                    (string)($route['name'] ?? ''),
+                    (string)($route['date'] ?? ''),
+                    (string)($route['destination_label'] ?? $route['destination'] ?? ''),
+                    $category,
+                    count($categoryRequests),
+                    round($categoryWeight, 6),
+                    count($requests),
+                    round($totalWeight, 6),
+                    $hasDistance ? round((float)$route['distance_km'], 2) : '',
+                    $hasDistance ? (int)round((float)($route['duration_min'] ?? 0)) : '',
+                    (string)($route['distance_source'] ?? 'Не рассчитывалось'),
+                    (string)($route['vehicle'] ?? ''),
+                    (string)($route['driver'] ?? ''),
+                    (string)($route['notes'] ?? ''),
+                    (string)($route['created_at'] ?? ''),
+                    (string)($route['updated_at'] ?? ''),
+                ];
+            }
 
             foreach ($requests as $index => $request) {
                 $order = $index + 1;
@@ -122,7 +145,7 @@ final class Map8000XlsxExporter
             $zip->addFromString('xl/workbook.xml', $this->workbook());
             $zip->addFromString('xl/_rels/workbook.xml.rels', $this->workbookRelationships());
             $zip->addFromString('xl/styles.xml', $this->styles());
-            $zip->addFromString('xl/worksheets/sheet1.xml', $this->worksheet($summary, [10, 28, 14, 20, 10, 12, 17, 13, 20, 18, 18, 34, 24, 24]));
+            $zip->addFromString('xl/worksheets/sheet1.xml', $this->worksheet($summary, [10, 28, 14, 20, 18, 18, 20, 20, 20, 17, 13, 22, 18, 18, 34, 24, 24]));
             $zip->addFromString('xl/worksheets/sheet2.xml', $this->worksheet($details, [10, 28, 10, 14, 12, 20, 24, 42, 13, 13, 12, 16, 34, 18, 14, 20, 22, 38, 22, 28, 22, 20]));
             $zip->addFromString('xl/worksheets/sheet3.xml', $this->worksheet($points, [10, 28, 10, 20, 14, 42, 13, 13, 12]));
         } finally {

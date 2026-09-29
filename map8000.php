@@ -37,20 +37,6 @@ $jsVersion = (int)(@filemtime(__DIR__ . '/map8000_files/assets/map8000.js') ?: t
 <?php endif; ?>
 
 <main class="workspace">
-    <aside class="left-panel panel">
-        <section>
-            <h2>Заявки</h2>
-            <input id="search-input" class="control" type="search" placeholder="Адрес, регион, ОП, отход…">
-            <div class="filter-grid">
-                <select id="region-filter" class="control"><option value="">Все регионы</option></select>
-                <select id="category-filter" class="control"><option value="">Все категории</option></select>
-                <select id="operator-filter" class="control"><option value="">Все ОП</option></select>
-            </div>
-            <div id="filter-summary" class="muted"></div>
-            <div id="request-list" class="request-list"></div>
-        </section>
-    </aside>
-
     <section class="map-panel">
         <div id="map" class="map"></div>
         <div class="map-toolbar">
@@ -60,6 +46,7 @@ $jsVersion = (int)(@filemtime(__DIR__ . '/map8000_files/assets/map8000.js') ?: t
         <div id="selection-overlay" class="selection-overlay">
             <div id="selection-box" class="selection-box hidden"></div>
         </div>
+        <div id="route-color-legend" class="route-color-legend"></div>
         <div id="map-message" class="map-message">Загрузка карты…</div>
     </section>
 
@@ -90,9 +77,10 @@ $jsVersion = (int)(@filemtime(__DIR__ . '/map8000_files/assets/map8000.js') ?: t
             <div id="selection-summary" class="selection-summary">Заявки не выбраны</div>
             <div id="selected-list" class="selected-list"></div>
             <div class="route-actions">
-                <button id="optimize-btn" class="btn btn-primary" type="button">Построить оптимальный маршрут</button>
+                <button id="optimize-btn" class="btn btn-primary" type="button">Рассчитать расстояние</button>
                 <button id="save-route-btn" class="btn btn-success" type="button">Сохранить рейс</button>
             </div>
+            <div class="muted distance-hint">Расстояние не обязательно: рейс можно сохранить сразу.</div>
             <div id="route-metrics" class="route-metrics"></div>
         </section>
 
