@@ -99,7 +99,6 @@ function initMap() {
         clusterize: false,
         geoObjectOpenBalloonOnClick: true
     });
-    objectManager.objects.options.set({preset: 'islands#blueCircleDotIcon'});
     map.geoObjects.add(objectManager);
     savedRouteMarkerManager = new ymaps.ObjectManager({clusterize: false});
     map.geoObjects.add(savedRouteMarkerManager);
@@ -221,7 +220,7 @@ function renderMarkers(filtered) {
             : (requestRoutes.length ? routeColor(requestRoutes[0].id) : '#2563eb');
         return {
             type: 'Feature',
-            id: `request-${requestId}-${index}`,
+            id: `request-${requestId}-${index}-${isSelected ? 'selected' : 'default'}`,
             geometry: {type: 'Point', coordinates: [Number(request.latitude), Number(request.longitude)]},
             properties: {
                 balloonContentHeader: escapeHtml(request.address || request.id),
