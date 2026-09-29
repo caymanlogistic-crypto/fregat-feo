@@ -6,12 +6,7 @@ if (!isset($_SESSION['map8000_csrf'])) {
     $_SESSION['map8000_csrf'] = bin2hex(random_bytes(24));
 }
 
-$apiKeyYandex = trim((string)(getenv('YANDEX_MAPS_API_KEY') ?: ''));
-$configPath = __DIR__ . '/config.php';
-if (is_file($configPath)) {
-    require $configPath;
-    $apiKeyYandex = trim((string)($apiKeyYandex ?? ''));
-}
+$apiKeyYandex = '23e55c05-eb08-48c8-8387-7def1ba87cf5';
 
 $cssVersion = (int)(@filemtime(__DIR__ . '/map8000_files/assets/map8000.css') ?: time());
 $jsVersion = (int)(@filemtime(__DIR__ . '/map8000_files/assets/map8000.js') ?: time());
