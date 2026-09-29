@@ -152,7 +152,7 @@ function getFlightsWithFilter($pdo,$statusMap,$zayavkiInfo,$filterType='all'){
             $zayavki_ids=array_filter(explode(',',$flight['zayavki_ids']));$flight['zayavki_ids_array']=$zayavki_ids;
             if(!empty($zayavki_ids)){
                 $pl=implode(',',array_fill(0,count($zayavki_ids),'?'));
-                $stmt2=$pdo->prepare("SELECT zayavka_id,mass_brutto,naim_oo_gruzootpravitel,mno_adres_pogruzki FROM feo WHERE zayavka_id IN({$pl})");
+                $stmt2=$pdo->prepare("SELECT zayavka_id,mass_netto,mass_brutto,naim_oo_gruzootpravitel,mno_adres_pogruzki FROM feo WHERE zayavka_id IN({$pl})");
                 $stmt2->execute($zayavki_ids);$zayavkiData=$stmt2->fetchAll();
                 $enriched=[];$uniqAddr=[];$prepCnt=0;
                 foreach($zayavkiData as $z){
@@ -243,7 +243,7 @@ include('include/price.php');
 $warehouseNames = getWarehouseNamesForFlight($flight);
 $warehouseLoadingName = $warehouseNames['loading'];
 $warehouseUnloadingName = $warehouseNames['unloading'];
-$zd=[];foreach($flight['zayavki'] as $z){$w=number_format(floatval($z['mass_brutto']??0),3,'.','');$w=str_replace('.',',',$w);$zd[]=['id'=>$z['zayavka_id'],'weight'=>$w];}
+$zd=[];foreach($flight['zayavki'] as $z){$w=number_format(floatval($z['mass_netto']??0),3,'.','');$w=str_replace('.',',',$w);$zd[]=['id'=>$z['zayavka_id'],'weight'=>$w];}
 $zj=htmlspecialchars(json_encode($zd,JSON_UNESCAPED_UNICODE),ENT_QUOTES);
 $token = getFlightToken($flight['id']); // Генерируем зашифрованный токен
 ?>
@@ -319,7 +319,7 @@ function showRequests(btn,ev){
         const d=JSON.parse(btn.dataset.requests);
         const w=window.open('','DeleteWindow','width=300,height=300,scrollbars=yes,resizable=yes');
         if(!w){alert('Разрешите всплывающие окна');return;}
-        let h='<html><head><meta charset="UTF-8"><title>Заявки</title><style>body{font-family:monospace;font-size:14px;margin:10px}table{width:100%;border-collapse:collapse}th,td{padding:3px 8px;text-align:left}</style></head><body><table><thead><tr><th>Заявка</th><th>Масса брутто, т</th></tr></thead><tbody>';
+        let h='<html><head><meta charset="UTF-8"><title>Заявки</title><style>body{font-family:monospace;font-size:14px;margin:10px}table{width:100%;border-collapse:collapse}th,td{padding:3px 8px;text-align:left}</style></head><body><table><thead><tr><th>Заявка</th><th>Масса нетто, т</th></tr></thead><tbody>';
         for(let i=0;i<d.length;i++)h+='<tr><td>'+d[i].id+'</td><td>'+d[i].weight+'</td></tr>';
         h+='</tbody></table></body></html>';w.document.write(h);w.document.close();w.focus();
     }catch(e){console.error(e);alert('Ошибка загрузки данных');}
