@@ -215,6 +215,9 @@ function renderMarkers(filtered) {
         const isSelected = selectedIds.has(requestId);
         const requestRoutes = memberships.get(requestId) || [];
         const routeTags = requestRoutes.map(route => `<span class="balloon-route-tag"><span class="color-dot" style="--route-color:${routeColor(route.id)}"></span>Рейс №${Number(route.id)}</span>`).join('');
+        const actions = isSelected
+            ? `<div class="balloon-actions"><button type="button" data-edit-request="${escapeAttribute(request.id)}">Изменить</button><button class="danger" type="button" data-remove-request="${escapeAttribute(request.id)}">Убрать</button></div>`
+            : `<button type="button" data-add-request="${escapeAttribute(request.id)}">Добавить</button>`;
         const markerColor = isSelected
             ? selectedMarkerColor
             : (requestRoutes.length ? routeColor(requestRoutes[0].id) : '#2563eb');
@@ -224,7 +227,7 @@ function renderMarkers(filtered) {
             geometry: {type: 'Point', coordinates: [Number(request.latitude), Number(request.longitude)]},
             properties: {
                 balloonContentHeader: escapeHtml(request.address || request.id),
-                balloonContentBody: `<div class="balloon-request"><div><strong>${escapeHtml(request.id)}</strong> · ${formatWeight(request.weight_t)}${routeTags ? `<div class="balloon-route-tags">${routeTags}</div>` : ''}</div><button type="button" data-add-request="${escapeAttribute(request.id)}" ${isSelected ? 'disabled' : ''}>${isSelected ? 'Добавлено' : 'Добавить'}</button></div>`
+                balloonContentBody: `<div class="balloon-request"><div><strong>${escapeHtml(request.id)}</strong> · ${formatWeight(request.weight_t)}${routeTags ? `<div class="balloon-route-tags">${routeTags}</div>` : ''}</div>${actions}</div>`
             },
             options: {preset: 'islands#circleDotIcon', iconColor: markerColor}
         };
@@ -241,6 +244,9 @@ function renderSavedRouteMarkers() {
     routes.forEach(route => {
         (Array.isArray(route.requests) ? route.requests : []).forEach((request, index) => {
             const requestId = String(request.id);
+            const actions = selectedIds.has(requestId)
+                ? `<div class="balloon-actions"><button type="button" data-edit-request="${escapeAttribute(request.id)}">Изменить</button><button class="danger" type="button" data-remove-request="${escapeAttribute(request.id)}">Убрать</button></div>`
+                : '';
             features.push({
                 type: 'Feature',
                 id: `route-${Number(route.id)}-${requestId}-${index}`,
@@ -249,7 +255,7 @@ function renderSavedRouteMarkers() {
                     iconCaption: `№${Number(route.id)}`,
                     hintContent: `Рейс №${Number(route.id)}: ${escapeHtml(route.name || '')}`,
                     balloonContentHeader: `Рейс №${Number(route.id)} ${escapeHtml(route.name || '')}`,
-                    balloonContentBody: `<strong>${escapeHtml(request.id)}</strong> · ${formatWeight(request.weight_t)}<br>${escapeHtml(request.address || '')}`
+                    balloonContentBody: `<strong>${escapeHtml(request.id)}</strong> · ${formatWeight(request.weight_t)}<br>${escapeHtml(request.address || '')}${actions}`
                 },
                 options: {
                     preset: 'islands#circleDotIcon',
@@ -299,22 +305,10 @@ function removeRequest(id) {
 }
 
 function renderSelected() {
-    const container = document.getElementById('selected-list');
     const totalWeight = selected.reduce((sum, request) => sum + Number(request.weight_t || 0), 0);
     document.getElementById('selection-summary').textContent = selected.length
         ? `${selected.length} заявок · ${formatWeight(totalWeight)}${currentMetrics ? '' : ' · расстояние не рассчитано'}`
         : 'Заявки не выбраны';
-    if (!selected.length) {
-        container.innerHTML = '<div class="empty-state">Выделите заявки рамкой или добавьте из метки на карте.</div>';
-        renderRouteLegend();
-        return;
-    }
-    container.innerHTML = selected.map((request, index) => `<div class="selected-item">
-        <span class="order-number">${index + 1}</span>
-        <div><strong>${escapeHtml(request.address || request.id)}</strong><span>${formatWeight(request.weight_t)}${index === 0 ? ' · начало маршрута' : ''}</span></div>
-        <button class="icon-btn" type="button" title="Изменить" data-edit-request="${escapeAttribute(request.id)}">✎</button>
-        <button class="icon-btn danger" type="button" title="Удалить" data-remove-request="${escapeAttribute(request.id)}">×</button>
-    </div>`).join('');
     renderRouteLegend();
 }
 
