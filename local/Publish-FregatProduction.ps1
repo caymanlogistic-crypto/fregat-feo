@@ -51,6 +51,10 @@ function Test-DeployablePath {
     $fileName = [System.IO.Path]::GetFileName($Path)
     $extension = [System.IO.Path]::GetExtension($Path).ToLowerInvariant()
 
+    if ($Path -in @('map8000_data/requests.xlsx', 'map8000_data/.htaccess')) {
+        return $true
+    }
+
     if ($Path -eq 'map2.php' -or
         $fileName -eq 'config.php' -or
         $fileName.EndsWith('.example.php') -or
@@ -112,6 +116,25 @@ $forbiddenDeletes = @($deletedOrRenamed | Where-Object { $_ -and (Test-Deployabl
 if ($forbiddenDeletes.Count -gt 0) {
     throw "Automatic deletion/rename of runtime files is forbidden:`n$($forbiddenDeletes -join "`n")"
 }
+
+# The first map8000 fallback publish may follow a skipped Actions run. In that
+# case its source workbook and access rule are unchanged in Git but still absent
+# on production, so include only those missing bootstrap files explicitly.
+foreach ($relative in @('map8000_data/requests.xlsx', 'map8000_data/.htaccess')) {
+    $source = Join-Path $repositoryRoot ($relative -replace '/', '\')
+    if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
+        throw "Required map8000 bootstrap file is missing: $relative"
+    }
+    $remotePath = "$targetRoot/$relative"
+    $remotePresence = Invoke-Native ssh @(
+        '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', $SshAlias,
+        "test -f '$remotePath' && printf present || printf missing"
+    ) -Capture
+    if ($remotePresence -eq 'missing') {
+        $deployFiles += $relative
+    }
+}
+$deployFiles = @($deployFiles | Sort-Object -Unique)
 
 foreach ($relative in $deployFiles) {
     $source = Join-Path $repositoryRoot ($relative -replace '/', '\')
