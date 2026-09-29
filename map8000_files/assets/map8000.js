@@ -11,6 +11,11 @@ const destinationCatalog = {
     ekaterinburg: {label: 'Екатеринбург', coords: [56.838011, 60.597465]}
 };
 
+const routePalette = [
+    '#dc2626', '#16a34a', '#7c3aed', '#ea580c', '#0891b2', '#c026d3',
+    '#4f46e5', '#65a30d', '#be123c', '#0f766e', '#9333ea', '#ca8a04'
+];
+
 let requests = [];
 let requestById = new Map();
 let selected = [];
@@ -21,8 +26,8 @@ let routeDirty = true;
 let currentMetrics = null;
 let map = null;
 let objectManager = null;
+let savedRouteMarkerManager = null;
 let routeObjects = [];
-let filterTimer = null;
 let currentFiltered = [];
 let rectangleMode = false;
 let rectangleStart = null;
@@ -38,9 +43,6 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 function bindUi() {
-    ['search-input', 'region-filter', 'category-filter', 'operator-filter'].forEach(id => {
-        document.getElementById(id)?.addEventListener(id === 'search-input' ? 'input' : 'change', scheduleFilter);
-    });
     document.getElementById('destination')?.addEventListener('change', markRouteDirty);
     document.getElementById('optimize-btn')?.addEventListener('click', () => optimizeAndDraw(true));
     document.getElementById('save-route-btn')?.addEventListener('click', saveRoute);
@@ -78,7 +80,6 @@ async function loadInitialData() {
         requests = Array.isArray(requestPayload.requests) ? requestPayload.requests : [];
         requestById = new Map(requests.map(request => [String(request.id), request]));
         routes = Array.isArray(routePayload.routes) ? routePayload.routes : [];
-        populateFilters();
         applyFilters();
         renderRoutes();
         const stats = requestPayload.stats || {};
@@ -104,52 +105,16 @@ function initMap() {
     objectManager.objects.options.set({preset: 'islands#blueCircleDotIcon'});
     objectManager.clusters.options.set({preset: 'islands#blueClusterIcons'});
     map.geoObjects.add(objectManager);
+    savedRouteMarkerManager = new ymaps.ObjectManager({clusterize: false});
+    map.geoObjects.add(savedRouteMarkerManager);
     initRectangleSelection();
     setMapMessage('');
     applyFilters();
 }
 
-function populateFilters() {
-    fillSelect('region-filter', uniqueValues(requests.map(item => item.region)), 'Все регионы');
-    fillSelect('category-filter', uniqueValues(requests.map(item => item.category)), 'Все категории');
-    fillSelect('operator-filter', uniqueValues(requests.map(item => item.operator)), 'Все ОП');
-}
-
-function fillSelect(id, values, emptyLabel) {
-    const select = document.getElementById(id);
-    if (!select) return;
-    select.innerHTML = `<option value="">${escapeHtml(emptyLabel)}</option>` + values
-        .map(value => `<option value="${escapeAttribute(value)}">${escapeHtml(value)}</option>`)
-        .join('');
-}
-
-function uniqueValues(values) {
-    return [...new Set(values.map(value => String(value || '').trim()).filter(Boolean))]
-        .sort((a, b) => a.localeCompare(b, 'ru'));
-}
-
-function scheduleFilter() {
-    clearTimeout(filterTimer);
-    filterTimer = setTimeout(applyFilters, 180);
-}
-
 function applyFilters() {
-    const search = String(document.getElementById('search-input')?.value || '').trim().toLocaleLowerCase('ru');
-    const region = document.getElementById('region-filter')?.value || '';
-    const category = document.getElementById('category-filter')?.value || '';
-    const operator = document.getElementById('operator-filter')?.value || '';
-    const filtered = requests.filter(request => {
-        if (region && request.region !== region) return false;
-        if (category && request.category !== category) return false;
-        if (operator && request.operator !== operator) return false;
-        if (!search) return true;
-        return [request.id, request.region, request.municipality, request.address, request.operator, request.waste_type, request.fkko_code]
-            .some(value => String(value || '').toLocaleLowerCase('ru').includes(search));
-    });
-    currentFiltered = filtered;
-    renderRequestList(filtered);
-    renderMarkers(filtered);
-    document.getElementById('filter-summary').textContent = `Найдено: ${formatNumber(filtered.length)} из ${formatNumber(requests.length)}. В списке показаны первые 300.`;
+    currentFiltered = requests;
+    renderMarkers(currentFiltered);
 }
 
 function initRectangleSelection() {
@@ -246,28 +211,10 @@ function clearSelectedRequests() {
     applyFilters();
 }
 
-function renderRequestList(filtered) {
-    const container = document.getElementById('request-list');
-    if (!container) return;
-    if (!filtered.length) {
-        container.innerHTML = '<div class="empty-state">Заявки не найдены.</div>';
-        return;
-    }
-    container.innerHTML = filtered.slice(0, 300).map(request => {
-        const alreadySelected = selected.some(item => String(item.id) === String(request.id));
-        return `<article class="request-card ${alreadySelected ? 'is-selected' : ''}">
-            <div class="request-card-main">
-                <strong>${escapeHtml(request.address || 'Адрес не указан')}</strong>
-                <span>${escapeHtml(request.region || '')}${request.municipality ? ` · ${escapeHtml(request.municipality)}` : ''}</span>
-                <span>${escapeHtml(request.operator || 'ОП не указан')} · ${formatWeight(request.weight_t)}</span>
-            </div>
-            <button class="small-btn" type="button" data-add-request="${escapeAttribute(request.id)}" ${alreadySelected ? 'disabled' : ''}>${alreadySelected ? 'Добавлено' : 'Добавить'}</button>
-        </article>`;
-    }).join('');
-}
-
 function renderMarkers(filtered) {
     if (!objectManager) return;
+    const memberships = buildRouteMembershipMap();
+    const selectedIds = new Set(selected.map(item => String(item.id)));
     const groups = new Map();
     filtered.forEach(request => {
         const key = `${Number(request.latitude).toFixed(6)},${Number(request.longitude).toFixed(6)}`;
@@ -280,9 +227,17 @@ function renderMarkers(filtered) {
         const first = items[0];
         const shown = items.slice(0, 50);
         const body = shown.map(item => {
-            const isSelected = selected.some(selectedItem => String(selectedItem.id) === String(item.id));
-            return `<div class="balloon-request"><div><strong>${escapeHtml(item.id)}</strong> · ${formatWeight(item.weight_t)}<br>${escapeHtml(item.address)}</div><button type="button" data-add-request="${escapeAttribute(item.id)}" ${isSelected ? 'disabled' : ''}>${isSelected ? 'Добавлено' : 'Добавить'}</button></div>`;
+            const isSelected = selectedIds.has(String(item.id));
+            const routeTags = (memberships.get(String(item.id)) || []).map(route => `<span class="balloon-route-tag"><span class="color-dot" style="--route-color:${routeColor(route.id)}"></span>Рейс №${Number(route.id)}</span>`).join('');
+            return `<div class="balloon-request"><div><strong>${escapeHtml(item.id)}</strong> · ${formatWeight(item.weight_t)}<br>${escapeHtml(item.address)}${routeTags ? `<div class="balloon-route-tags">${routeTags}</div>` : ''}</div><button type="button" data-add-request="${escapeAttribute(item.id)}" ${isSelected ? 'disabled' : ''}>${isSelected ? 'Добавлено' : 'Добавить'}</button></div>`;
         }).join('');
+        const groupRouteIds = [];
+        items.forEach(item => (memberships.get(String(item.id)) || []).forEach(route => {
+            const routeId = Number(route.id);
+            if (!groupRouteIds.includes(routeId)) groupRouteIds.push(routeId);
+        }));
+        const hasCurrentSelection = items.some(item => selectedIds.has(String(item.id)));
+        const markerColor = groupRouteIds.length ? routeColor(groupRouteIds[0]) : (hasCurrentSelection ? '#f59e0b' : '#2563eb');
         features.push({
             type: 'Feature',
             id: featureId++,
@@ -290,12 +245,61 @@ function renderMarkers(filtered) {
             properties: {
                 iconCaption: items.length > 1 ? String(items.length) : '',
                 balloonContentHeader: `${escapeHtml(first.address)} · ${items.length} заявок`,
-                balloonContentBody: `<button class="balloon-add-all" type="button" data-add-group="${escapeAttribute(key)}">Добавить все заявки точки</button>${body}${items.length > shown.length ? `<div class="muted">Ещё ${items.length - shown.length} заявок доступны через поиск.</div>` : ''}`
-            }
+                balloonContentBody: `<button class="balloon-add-all" type="button" data-add-group="${escapeAttribute(key)}">Добавить все заявки точки</button>${body}${items.length > shown.length ? `<div class="muted">Ещё ${items.length - shown.length} заявок в этой точке.</div>` : ''}`
+            },
+            options: {preset: 'islands#circleDotIcon', iconColor: markerColor}
         });
     });
     objectManager.removeAll();
     objectManager.add({type: 'FeatureCollection', features});
+    renderSavedRouteMarkers();
+}
+
+function renderSavedRouteMarkers() {
+    if (!savedRouteMarkerManager) return;
+    const features = [];
+    routes.forEach(route => {
+        const routePoints = new Map();
+        (Array.isArray(route.requests) ? route.requests : []).forEach(request => {
+            const key = `${Number(request.latitude).toFixed(6)},${Number(request.longitude).toFixed(6)}`;
+            if (!routePoints.has(key)) routePoints.set(key, []);
+            routePoints.get(key).push(request);
+        });
+        routePoints.forEach((items, key) => {
+            const first = items[0];
+            features.push({
+                type: 'Feature',
+                id: `route-${Number(route.id)}-${key}`,
+                geometry: {type: 'Point', coordinates: [Number(first.latitude), Number(first.longitude)]},
+                properties: {
+                    iconCaption: `№${Number(route.id)}`,
+                    hintContent: `Рейс №${Number(route.id)}: ${escapeHtml(route.name || '')}`,
+                    balloonContentHeader: `Рейс №${Number(route.id)} ${escapeHtml(route.name || '')}`,
+                    balloonContentBody: `${items.length} заявок в точке<br>${escapeHtml(first.address || '')}`
+                },
+                options: {preset: 'islands#circleDotIcon', iconColor: routeColor(route.id), zIndex: 1000}
+            });
+        });
+    });
+    savedRouteMarkerManager.removeAll();
+    savedRouteMarkerManager.add({type: 'FeatureCollection', features});
+}
+
+function buildRouteMembershipMap() {
+    const memberships = new Map();
+    routes.forEach(route => {
+        (Array.isArray(route.requests) ? route.requests : []).forEach(request => {
+            const requestId = String(request.id);
+            if (!memberships.has(requestId)) memberships.set(requestId, []);
+            memberships.get(requestId).push(route);
+        });
+    });
+    return memberships;
+}
+
+function routeColor(routeId) {
+    const numericId = Math.max(1, Number(routeId) || 1);
+    return routePalette[(numericId - 1) % routePalette.length];
 }
 
 function addGroup(groupKey) {
@@ -328,10 +332,11 @@ function renderSelected() {
     const container = document.getElementById('selected-list');
     const totalWeight = selected.reduce((sum, request) => sum + Number(request.weight_t || 0), 0);
     document.getElementById('selection-summary').textContent = selected.length
-        ? `${selected.length} заявок · ${formatWeight(totalWeight)}${routeDirty ? ' · требуется пересчёт' : ''}`
+        ? `${selected.length} заявок · ${formatWeight(totalWeight)}${currentMetrics ? '' : ' · расстояние не рассчитано'}`
         : 'Заявки не выбраны';
     if (!selected.length) {
-        container.innerHTML = '<div class="empty-state">Добавьте заявки из списка или с карты.</div>';
+        container.innerHTML = '<div class="empty-state">Выделите заявки рамкой или добавьте из метки на карте.</div>';
+        renderRouteLegend();
         return;
     }
     container.innerHTML = selected.map((request, index) => `<div class="selected-item">
@@ -340,6 +345,7 @@ function renderSelected() {
         <button class="icon-btn" type="button" title="Изменить" data-edit-request="${escapeAttribute(request.id)}">✎</button>
         <button class="icon-btn danger" type="button" title="Удалить" data-remove-request="${escapeAttribute(request.id)}">×</button>
     </div>`).join('');
+    renderRouteLegend();
 }
 
 async function optimizeAndDraw(showMessages = false) {
@@ -476,13 +482,13 @@ async function saveRoute() {
         showToast('Добавьте хотя бы одну заявку.', true);
         return;
     }
-    if (routeDirty || !currentMetrics) {
-        const optimized = await optimizeAndDraw(false);
-        if (!optimized) return;
-    }
-
     setBusy(true, 'Сохранение…');
     try {
+        const metrics = currentMetrics || {
+            distance_km: 0,
+            duration_min: 0,
+            distance_source: 'Не рассчитывалось'
+        };
         const result = await postJson('save_route', {
             id: editingRouteId || 0,
             name,
@@ -492,7 +498,8 @@ async function saveRoute() {
             driver: document.getElementById('route-driver').value,
             notes: document.getElementById('route-notes').value,
             requests: selected,
-            ...currentMetrics
+            distance_calculated: Boolean(currentMetrics),
+            ...metrics
         });
         showToast(`Рейс №${result.route.id} сохранён.`);
         await reloadRoutes();
@@ -508,22 +515,41 @@ async function reloadRoutes() {
     const payload = await getJson(`${apiUrl}?action=routes`);
     routes = Array.isArray(payload.routes) ? payload.routes : [];
     renderRoutes();
+    renderMarkers(currentFiltered);
 }
 
 function renderRoutes() {
     const container = document.getElementById('routes-list');
     if (!routes.length) {
         container.innerHTML = '<div class="empty-state">Сохранённых рейсов пока нет.</div>';
+        renderRouteLegend();
         return;
     }
-    container.innerHTML = routes.map(route => `<article class="route-card ${Number(route.id) === editingRouteId ? 'is-active' : ''}">
+    container.innerHTML = routes.map(route => {
+        const hasDistance = Number(route.distance_km || 0) > 0 && route.distance_source !== 'Не рассчитывалось';
+        const distanceText = hasDistance
+            ? `${Number(route.distance_km).toLocaleString('ru-RU', {maximumFractionDigits: 2})} км`
+            : 'Расстояние не рассчитывалось';
+        return `<article class="route-card ${Number(route.id) === editingRouteId ? 'is-active' : ''}" style="--route-color:${routeColor(route.id)}">
         <div class="route-card-main" data-load-route="${Number(route.id)}">
             <strong>№${Number(route.id)} ${escapeHtml(route.name || '')}</strong>
             <span>${escapeHtml(route.destination_label || '')} · ${Number(route.requests_count || route.requests?.length || 0)} заявок · ${formatWeight(route.total_weight_t)}</span>
-            <span>${Number(route.distance_km || 0).toLocaleString('ru-RU', {maximumFractionDigits: 2})} км${route.date ? ` · ${escapeHtml(route.date)}` : ''}</span>
+            <span>${distanceText}${route.date ? ` · ${escapeHtml(route.date)}` : ''}</span>
         </div>
         <button class="icon-btn danger" type="button" title="Удалить" data-delete-route="${Number(route.id)}">×</button>
-    </article>`).join('');
+    </article>`;
+    }).join('');
+    renderRouteLegend();
+}
+
+function renderRouteLegend() {
+    const container = document.getElementById('route-color-legend');
+    if (!container) return;
+    const selectedLegend = selected.length && !editingRouteId
+        ? '<div class="legend-item"><span class="color-dot" style="--route-color:#f59e0b"></span><span>Выбрано в новый рейс</span></div>'
+        : '';
+    const routeItems = routes.map(route => `<div class="legend-item"><span class="color-dot" style="--route-color:${routeColor(route.id)}"></span><span>Рейс №${Number(route.id)} ${escapeHtml(route.name || '')}</span></div>`).join('');
+    container.innerHTML = selectedLegend + routeItems;
 }
 
 function loadRoute(id) {
@@ -542,11 +568,13 @@ function loadRoute(id) {
     badge.textContent = `Рейс №${route.id}`;
     badge.classList.remove('hidden');
     routeDirty = false;
-    currentMetrics = {
-        distance_km: Number(route.distance_km || 0),
-        duration_min: Number(route.duration_min || 0),
-        distance_source: route.distance_source || 'Геодезическая оценка'
-    };
+    currentMetrics = Number(route.distance_km || 0) > 0 && route.distance_source !== 'Не рассчитывалось'
+        ? {
+            distance_km: Number(route.distance_km || 0),
+            duration_min: Number(route.duration_min || 0),
+            distance_source: route.distance_source || 'Геодезическая оценка'
+        }
+        : null;
     clearRouteObjects();
     renderSelected();
     renderMetrics();

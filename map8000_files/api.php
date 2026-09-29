@@ -83,10 +83,19 @@ try {
         $destinationKey = map8000DestinationKey($payload['destination'] ?? '');
         $requests = map8000NormalizeRequests($payload['requests'] ?? []);
         $optimized = map8000Optimize($requests, MAP8000_DESTINATIONS[$destinationKey]['coords']);
-        $distanceKm = max(0.0, min(1000000.0, (float)($payload['distance_km'] ?? 0)));
-        $durationMin = max(0.0, min(10000000.0, (float)($payload['duration_min'] ?? 0)));
-        if ($distanceKm <= 0) {
-            $distanceKm = map8000PathDistance($optimized, MAP8000_DESTINATIONS[$destinationKey]['coords']);
+        $distanceCalculated = filter_var($payload['distance_calculated'] ?? false, FILTER_VALIDATE_BOOLEAN);
+        $distanceKm = 0.0;
+        $durationMin = 0.0;
+        $distanceSource = 'Не рассчитывалось';
+        if ($distanceCalculated) {
+            $distanceKm = max(0.0, min(1000000.0, (float)($payload['distance_km'] ?? 0)));
+            $durationMin = max(0.0, min(10000000.0, (float)($payload['duration_min'] ?? 0)));
+            if ($distanceKm <= 0) {
+                $distanceKm = map8000PathDistance($optimized, MAP8000_DESTINATIONS[$destinationKey]['coords']);
+            }
+            $distanceSource = in_array(($payload['distance_source'] ?? ''), ['Яндекс.Маршруты', 'Геодезическая оценка'], true)
+                ? (string)$payload['distance_source']
+                : 'Геодезическая оценка';
         }
 
         $route = [
@@ -101,9 +110,7 @@ try {
             'notes' => map8000Text($payload['notes'] ?? '', 4000),
             'distance_km' => round($distanceKm, 3),
             'duration_min' => round($durationMin, 1),
-            'distance_source' => in_array(($payload['distance_source'] ?? ''), ['Яндекс.Маршруты', 'Геодезическая оценка'], true)
-                ? (string)$payload['distance_source']
-                : 'Геодезическая оценка',
+            'distance_source' => $distanceSource,
             'requests_count' => count($optimized),
             'total_weight_t' => round(array_reduce(
                 $optimized,
