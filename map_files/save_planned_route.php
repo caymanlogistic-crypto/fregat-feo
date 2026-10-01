@@ -1367,12 +1367,41 @@ try {
             if ($actualTs === false) {
                 jsonOut(['success' => false, 'message' => 'Некорректная дата начала вывоза']);
             }
-            $stmt = $pdo->prepare('UPDATE flights SET status = :status, actual_start_date = :actual_start WHERE id = :id LIMIT 1');
-            $stmt->execute([
-                ':status' => STATUS_STARTED,
-                ':actual_start' => date('Y-m-d H:i:s', $actualTs),
-                ':id' => $routeId,
-            ]);
+            $startedOwnTransaction = !$pdo->inTransaction();
+            try {
+                if ($startedOwnTransaction) {
+                    $pdo->beginTransaction();
+                }
+                $stmt = $pdo->prepare('UPDATE flights SET status = :status, actual_start_date = :actual_start WHERE id = :id LIMIT 1');
+                $stmt->execute([
+                    ':status' => STATUS_STARTED,
+                    ':actual_start' => date('Y-m-d H:i:s', $actualTs),
+                    ':id' => $routeId,
+                ]);
+                $warehouseMovements = createWarehouseMovementsForStartedFlight($pdo, $routeId);
+                if (empty($warehouseMovements['success'])) {
+                    if ($startedOwnTransaction && $pdo->inTransaction()) {
+                        $pdo->rollBack();
+                    }
+                    jsonOut([
+                        'success' => false,
+                        'message' => 'Не удалось списать заявки со склада. Переход в «Вывоз начался» отменён.',
+                        'warehouse_movements' => $warehouseMovements,
+                    ]);
+                }
+                if ($startedOwnTransaction && $pdo->inTransaction()) {
+                    $pdo->commit();
+                }
+            } catch (Throwable $wmError) {
+                if ($startedOwnTransaction && $pdo->inTransaction()) {
+                    $pdo->rollBack();
+                }
+                mapError('Warehouse issue on route start failed', ['flight_id' => $routeId, 'error' => $wmError->getMessage()]);
+                jsonOut([
+                    'success' => false,
+                    'message' => 'Не удалось списать заявки со склада. Переход в «Вывоз начался» отменён.',
+                ]);
+            }
             $afterStarted = loadFlightSnapshot($pdo, $routeId) ?: $flight;
             [$title, $manager, $driver, $meta] = buildCompactFlightContext($pdo, $afterStarted, $routeId);
             $notifyResult = sendMaxNotification(
@@ -1398,7 +1427,8 @@ try {
                 'success' => true,
                 'message' => 'Рейс переведен в ВЫВОЗНАЧАЛСЯ',
                 'notify_success' => (bool)$notifyResult['success'],
-                'notify_error' => $notifyResult['error']
+                'notify_error' => $notifyResult['error'],
+                'warehouse_movements' => $warehouseMovements,
             ]);
         }
 
