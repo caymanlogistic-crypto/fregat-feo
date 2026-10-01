@@ -209,7 +209,17 @@ function validateWarehouseRequirementsForCompleted(array $flight): ?string
     return null;
 }
 
+function createWarehouseMovementsForStartedFlight(PDO $pdo, int $flightId): array
+{
+    return createWarehouseMovementsForFlightEvent($pdo, $flightId, 'started');
+}
+
 function createWarehouseMovementsForCompletedFlight(PDO $pdo, int $flightId): array
+{
+    return createWarehouseMovementsForFlightEvent($pdo, $flightId, 'completed');
+}
+
+function createWarehouseMovementsForFlightEvent(PDO $pdo, int $flightId, string $event): array
 {
     $result = [
         'success' => true,
@@ -219,14 +229,8 @@ function createWarehouseMovementsForCompletedFlight(PDO $pdo, int $flightId): ar
         'messages' => [],
     ];
 
-    if (!wmTableExists($pdo)) {
-        $result['success'] = false;
-        $result['errors'][] = 'Таблица warehouse_movements не найдена';
-        return $result;
-    }
-
     try {
-        $stmt = $pdo->prepare('SELECT id, status, route_type, unload_type, source_warehouse_id, destination_warehouse_id, zayavki_ids, actual_end_date FROM flights WHERE id = :id LIMIT 1');
+        $stmt = $pdo->prepare('SELECT id, status, route_type, unload_type, source_warehouse_id, destination_warehouse_id, zayavki_ids, actual_start_date, actual_end_date FROM flights WHERE id = :id LIMIT 1');
         $stmt->execute([':id' => $flightId]);
         $flight = $stmt->fetch(PDO::FETCH_ASSOC);
         if (!is_array($flight)) {
@@ -240,8 +244,14 @@ function createWarehouseMovementsForCompletedFlight(PDO $pdo, int $flightId): ar
         return $result;
     }
 
-    if ((string)($flight['status'] ?? '') !== 'completed') {
-        $result['messages'][] = 'Рейс не в статусе completed, движения не создаются';
+    if (!in_array($event, ['started', 'completed'], true)) {
+        $result['success'] = false;
+        $result['errors'][] = 'Неизвестное событие складского движения';
+        return $result;
+    }
+
+    if ((string)($flight['status'] ?? '') !== $event) {
+        $result['messages'][] = "Рейс не в статусе {$event}, движения не создаются";
         return $result;
     }
 
@@ -249,6 +259,17 @@ function createWarehouseMovementsForCompletedFlight(PDO $pdo, int $flightId): ar
 
     if ($routeType === ROUTE_TYPE_GENERATOR_TO_UTILIZER) {
         $result['messages'][] = 'Для маршрута ОО → Утилизатор складские движения не требуются';
+        return $result;
+    }
+
+    if ($event === 'started' && $routeType === ROUTE_TYPE_GENERATOR_TO_WAREHOUSE) {
+        $result['messages'][] = 'Поступление на склад будет создано после завершения рейса';
+        return $result;
+    }
+
+    if (!wmTableExists($pdo)) {
+        $result['success'] = false;
+        $result['errors'][] = 'Таблица warehouse_movements не найдена';
         return $result;
     }
 
@@ -280,8 +301,8 @@ function createWarehouseMovementsForCompletedFlight(PDO $pdo, int $flightId): ar
         return $result;
     }
 
-    $movementDate = !empty($flight['actual_end_date'])
-        ? trim((string)$flight['actual_end_date'])
+    $movementDate = !empty($flight[$event === 'started' ? 'actual_start_date' : 'actual_end_date'])
+        ? trim((string)$flight[$event === 'started' ? 'actual_start_date' : 'actual_end_date'])
         : date('Y-m-d H:i:s');
 
     $sourceWarehouseId = (int)($flight['source_warehouse_id'] ?? 0);
@@ -319,7 +340,7 @@ function createWarehouseMovementsForCompletedFlight(PDO $pdo, int $flightId): ar
             'status' => WM_STATUS_ACTIVE,
         ];
 
-        if ($routeType === ROUTE_TYPE_GENERATOR_TO_WAREHOUSE) {
+        if ($routeType === ROUTE_TYPE_GENERATOR_TO_WAREHOUSE && $event === 'completed') {
             $row = array_merge($baseRow, [
                 'movement_type' => WM_MOVEMENT_RECEIPT,
                 'warehouse_id' => $destinationWarehouseId,
@@ -338,19 +359,40 @@ function createWarehouseMovementsForCompletedFlight(PDO $pdo, int $flightId): ar
                 $result['created']++;
             }
         } elseif ($routeType === ROUTE_TYPE_WAREHOUSE_TO_WAREHOUSE) {
-            // Списываем только заявки, реально находящиеся на source_warehouse
-            if (!isset($availableOnSource[$zayavkaId])) {
-                $skippedNotOnSource[] = $zayavkaId;
-                $result['skipped']++;
-                continue;
-            }
+            $outExists = wmMovementExists($pdo, $flightId, WM_MOVEMENT_TRANSFER_OUT, $sourceWarehouseId, $zayavkaId);
             $transferOut = array_merge($baseRow, [
                 'movement_type' => WM_MOVEMENT_TRANSFER_OUT,
                 'warehouse_id' => $sourceWarehouseId,
                 'source_warehouse_id' => $sourceWarehouseId,
                 'destination_warehouse_id' => $destinationWarehouseId,
+                'movement_date' => !empty($flight['actual_start_date']) ? trim((string)$flight['actual_start_date']) : $movementDate,
                 'comment' => "Выбытие со склада для перемещения по рейсу #{$flightId}",
             ]);
+
+            if (!$outExists) {
+                // Обычно списание создаётся при старте. В completed оставлен fallback
+                // для рейсов, которые уже были started до установки этой версии.
+                if (!isset($availableOnSource[$zayavkaId])) {
+                    $skippedNotOnSource[] = $zayavkaId;
+                    $result['skipped']++;
+                    continue;
+                }
+                $err = wmInsertMovement($pdo, $transferOut);
+                if ($err !== null) {
+                    $result['errors'][] = "Заявка {$zayavkaId} (transfer_out): {$err}";
+                    continue;
+                } else {
+                    $result['created']++;
+                    $outExists = true;
+                }
+            } elseif ($event === 'started') {
+                $result['skipped']++;
+            }
+
+            if ($event === 'started') {
+                continue;
+            }
+
             $transferIn = array_merge($baseRow, [
                 'movement_type' => WM_MOVEMENT_TRANSFER_IN,
                 'warehouse_id' => $destinationWarehouseId,
@@ -358,18 +400,6 @@ function createWarehouseMovementsForCompletedFlight(PDO $pdo, int $flightId): ar
                 'destination_warehouse_id' => $destinationWarehouseId,
                 'comment' => "Поступление на склад после перемещения по рейсу #{$flightId}",
             ]);
-
-            if (!wmMovementExists($pdo, $flightId, WM_MOVEMENT_TRANSFER_OUT, $sourceWarehouseId, $zayavkaId)) {
-                $err = wmInsertMovement($pdo, $transferOut);
-                if ($err !== null) {
-                    $result['errors'][] = "Заявка {$zayavkaId} (transfer_out): {$err}";
-                } else {
-                    $result['created']++;
-                }
-            } else {
-                $result['skipped']++;
-            }
-
             if (!wmMovementExists($pdo, $flightId, WM_MOVEMENT_TRANSFER_IN, $destinationWarehouseId, $zayavkaId)) {
                 $err = wmInsertMovement($pdo, $transferIn);
                 if ($err !== null) {
@@ -381,6 +411,13 @@ function createWarehouseMovementsForCompletedFlight(PDO $pdo, int $flightId): ar
                 $result['skipped']++;
             }
         } elseif ($routeType === ROUTE_TYPE_WAREHOUSE_TO_UTILIZER) {
+            $issueExists = wmMovementExists($pdo, $flightId, WM_MOVEMENT_ISSUE, $sourceWarehouseId, $zayavkaId);
+            if ($issueExists) {
+                if ($event === 'started') {
+                    $result['skipped']++;
+                }
+                continue;
+            }
             // Списываем только заявки, реально находящиеся на source_warehouse
             if (!isset($availableOnSource[$zayavkaId])) {
                 $skippedNotOnSource[] = $zayavkaId;
@@ -392,12 +429,9 @@ function createWarehouseMovementsForCompletedFlight(PDO $pdo, int $flightId): ar
                 'warehouse_id' => $sourceWarehouseId,
                 'source_warehouse_id' => $sourceWarehouseId,
                 'destination_warehouse_id' => null,
+                'movement_date' => !empty($flight['actual_start_date']) ? trim((string)$flight['actual_start_date']) : $movementDate,
                 'comment' => "Вывоз со склада на утилизатор по рейсу #{$flightId}",
             ]);
-            if (wmMovementExists($pdo, $flightId, WM_MOVEMENT_ISSUE, $sourceWarehouseId, $zayavkaId)) {
-                $result['skipped']++;
-                continue;
-            }
             $err = wmInsertMovement($pdo, $row);
             if ($err !== null) {
                 $result['errors'][] = "Заявка {$zayavkaId}: {$err}";
@@ -410,6 +444,14 @@ function createWarehouseMovementsForCompletedFlight(PDO $pdo, int $flightId): ar
     if (!empty($skippedNotOnSource)) {
         $result['skipped_not_on_source_warehouse'] = $skippedNotOnSource;
         $result['messages'][] = "Пропущено заявок (не находятся на складе отправления #{$sourceWarehouseId}): " . count($skippedNotOnSource);
+        if ($event === 'started') {
+            $result['success'] = false;
+            $result['errors'][] = 'Не все заявки находятся на выбранном складе отправления';
+        }
+    }
+
+    if (!empty($result['errors'])) {
+        $result['success'] = false;
     }
 
     if (empty($result['errors']) && $result['created'] > 0) {
