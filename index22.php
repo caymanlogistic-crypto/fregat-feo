@@ -111,6 +111,20 @@ function formatFlightDates($flightData) {
     return '—';
 }
 
+function formatFlightNumber($flightId, $flightData) {
+    $number = '#' . (int)$flightId;
+    $routeType = strtolower(trim((string)($flightData['route_type'] ?? '')));
+    $unloadType = strtoupper(trim((string)($flightData['unload_type'] ?? '')));
+
+    if (in_array($routeType, ['warehouse_to_warehouse', 'warehouse_to_utilizer'], true)) {
+        return '(с)' . $number;
+    }
+    if ($routeType === 'generator_to_warehouse' || ($routeType === '' && $unloadType === 'SKLAD')) {
+        return $number . '(с)';
+    }
+    return $number;
+}
+
 // AJAX-запрос для формирования «Списка заявок в работе»
 // Берём только доступные заявки из блоков с ID > 105.
 if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['ajax']) && $_GET['ajax'] === 'get_work_zayavki') {
@@ -291,7 +305,7 @@ $flightDetailsMap = [];
 if ($show_only_flight) {
 try {
 $stmt = $pdo->query("
-SELECT id, zayavki_ids, comment, status,
+SELECT id, zayavki_ids, comment, status, unload_type, route_type,
 planned_start_date, planned_start_date_from, planned_start_date_to,
 actual_start_date, actual_end_date
 FROM flights
@@ -300,14 +314,19 @@ $flights = $stmt->fetchAll(PDO::FETCH_ASSOC);
 foreach ($flights as $flight) {
 $zayavkiIds = array_filter(explode(',', $flight['zayavki_ids']));
 foreach ($zayavkiIds as $zayavkaId) {
+$zayavkaId = trim($zayavkaId);
+if ($zayavkaId === '') continue;
 $flightZayavkiIds[] = $zayavkaId;
 if (!isset($zayavkaToFlightMap[$zayavkaId])) {
-$zayavkaToFlightMap[$zayavkaId] = $flight['id'];
+$zayavkaToFlightMap[$zayavkaId] = [];
 }
+$zayavkaToFlightMap[$zayavkaId][] = (int)$flight['id'];
 }
 $flightDetailsMap[$flight['id']] = [
 'comment' => $flight['comment'],
 'status' => $flight['status'],
+'unload_type' => $flight['unload_type'] ?? '',
+'route_type' => $flight['route_type'] ?? '',
 'planned_start_date' => $flight['planned_start_date'],
 'planned_start_date_from' => $flight['planned_start_date_from'],
 'planned_start_date_to' => $flight['planned_start_date_to'],
@@ -442,15 +461,21 @@ if ($block['status_type'] === 'marshrut') {
 } catch (Exception $e) {}
 
 try {
-$stmt = $pdo->query("SELECT id, zayavki_ids, comment, status, planned_start_date, planned_start_date_from, planned_start_date_to, actual_start_date, actual_end_date FROM flights");
+$stmt = $pdo->query("SELECT id, zayavki_ids, comment, status, unload_type, route_type, planned_start_date, planned_start_date_from, planned_start_date_to, actual_start_date, actual_end_date FROM flights");
 $flights = $stmt->fetchAll(PDO::FETCH_ASSOC);
 foreach ($flights as $flight) {
 $zayavkiIds = array_filter(explode(',', $flight['zayavki_ids']));
 foreach ($zayavkiIds as $zayavkaId) {
-if (!isset($zayavkaToFlightMap[$zayavkaId])) $zayavkaToFlightMap[$zayavkaId] = $flight['id'];
+$zayavkaId = trim($zayavkaId);
+if ($zayavkaId === '') continue;
+if (!isset($zayavkaToFlightMap[$zayavkaId])) {
+    $zayavkaToFlightMap[$zayavkaId] = [];
+}
+$zayavkaToFlightMap[$zayavkaId][] = (int)$flight['id'];
 }
 $flightDetailsMap[$flight['id']] = [
 'comment' => $flight['comment'], 'status' => $flight['status'],
+'unload_type' => $flight['unload_type'] ?? '', 'route_type' => $flight['route_type'] ?? '',
 'planned_start_date' => $flight['planned_start_date'],
 'planned_start_date_from' => $flight['planned_start_date_from'],
 'planned_start_date_to' => $flight['planned_start_date_to'],
@@ -467,7 +492,8 @@ $available_block_ids = isset($zayavkaToAvailableBlockMap[$zayavka_id]) ? array_v
 if (!empty($available_block_ids)) sort($available_block_ids, SORT_NUMERIC);
 $marshrut_ids = isset($zayavkaToMarshrutMap[$zayavka_id]) ? array_values(array_unique($zayavkaToMarshrutMap[$zayavka_id])) : [];
 if (!empty($marshrut_ids)) sort($marshrut_ids, SORT_NUMERIC);
-$flight_id = isset($zayavkaToFlightMap[$zayavka_id]) ? $zayavkaToFlightMap[$zayavka_id] : '';
+$flight_ids = isset($zayavkaToFlightMap[$zayavka_id]) ? array_values(array_unique($zayavkaToFlightMap[$zayavka_id])) : [];
+if (!empty($flight_ids)) sort($flight_ids, SORT_NUMERIC);
 
 $mass_kg = isset($row['mass_netto']) && $row['mass_netto'] !== '' ? floatval($row['mass_netto']) * 1000 : '';
 $mass_display = $mass_kg !== '' ? number_format($mass_kg, 0, '.', ' ') : '';
@@ -489,25 +515,43 @@ if (!empty($marshrut_ids)) {
 } else {
     $marshrut_display = '<span style="color:#999;">—</span>';
 }
-$flight_display = $flight_id !== '' ? '<span class="status-flight">Р#' . htmlspecialchars($flight_id) . '</span>' : '<span style="color:#999;">—</span>';
+$flight_display = '<span style="color:#999;">—</span>';
+if (!empty($flight_ids)) {
+    $flight_labels = [];
+    foreach ($flight_ids as $flightId) {
+        $flightData = $flightDetailsMap[$flightId] ?? [];
+        $flight_labels[] = htmlspecialchars(formatFlightNumber($flightId, $flightData));
+    }
+    $flight_display = '<span class="status-flight">' . implode(', ', $flight_labels) . '</span>';
+}
 
 // Статус
 $statusDisplay = '<span style="color:#999;">—</span>';
-if ($flight_id !== '' && isset($flightDetailsMap[$flight_id])) {
-    $flightStatus = $flightDetailsMap[$flight_id]['status'];
-    $statusData = isset($statusMap[$flightStatus]) ? $statusMap[$flightStatus] : null;
-    if ($statusData) {
-        $styleClass = ltrim($statusData['style'], '.');
-        $statusDisplay = '<span class="status-badge ' . htmlspecialchars($styleClass) . '">' . htmlspecialchars($statusData['наименование']) . '</span>';
-    } else {
-        $statusDisplay = '<span class="status-badge" style="background: #6c757d;">' . htmlspecialchars($flightStatus) . '</span>';
+if (!empty($flight_ids)) {
+    $statusLabels = [];
+    foreach ($flight_ids as $flight_id) {
+        if (!isset($flightDetailsMap[$flight_id])) continue;
+        $flightStatus = $flightDetailsMap[$flight_id]['status'];
+        $statusData = isset($statusMap[$flightStatus]) ? $statusMap[$flightStatus] : null;
+        if ($statusData) {
+            $styleClass = ltrim($statusData['style'], '.');
+            $statusLabels[] = '<span class="status-badge ' . htmlspecialchars($styleClass) . '">' . htmlspecialchars($statusData['наименование']) . '</span>';
+        } else {
+            $statusLabels[] = '<span class="status-badge" style="background: #6c757d;">' . htmlspecialchars($flightStatus) . '</span>';
+        }
     }
+    if (!empty($statusLabels)) $statusDisplay = implode('<br>', $statusLabels);
 }
 
 // Даты
 $datesDisplay = '<span style="color:#999;">—</span>';
-if ($flight_id !== '' && isset($flightDetailsMap[$flight_id])) {
-    $datesDisplay = formatFlightDates($flightDetailsMap[$flight_id]);
+if (!empty($flight_ids)) {
+    $dateLabels = [];
+    foreach ($flight_ids as $flight_id) {
+        if (!isset($flightDetailsMap[$flight_id])) continue;
+        $dateLabels[] = formatFlightDates($flightDetailsMap[$flight_id]);
+    }
+    if (!empty($dateLabels)) $datesDisplay = implode('<br>', $dateLabels);
 }
 
 // СТОИМОСТЬ и ₽/КГ
