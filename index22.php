@@ -522,7 +522,7 @@ if (!empty($flight_ids)) {
         $flightData = $flightDetailsMap[$flightId] ?? [];
         $flight_labels[] = htmlspecialchars(formatFlightNumber($flightId, $flightData));
     }
-    $flight_display = '<span class="status-flight">' . implode(', ', $flight_labels) . '</span>';
+    $flight_display = '<span class="status-flight">' . implode('<br>', $flight_labels) . '</span>';
 }
 
 // Статус
