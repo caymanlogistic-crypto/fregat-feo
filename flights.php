@@ -777,21 +777,22 @@ display: flex;
 align-items: center;
 justify-content: space-between;
 gap: 16px;
-flex-wrap: nowrap;
+flex-wrap: wrap;
 margin-bottom: 15px;
 }
 .flights-list-header h2 {
 margin: 0;
+flex: 0 0 100%;
 }
 .flights-list-filters {
 display: flex;
 align-items: center;
-justify-content: flex-end;
+justify-content: flex-start;
 flex-wrap: nowrap;
 gap: 6px;
-flex: 1;
-width: auto;
-margin-left: auto;
+flex: none;
+width: calc(100% - 250px);
+margin-left: 250px;
 padding-bottom: 2px;
 overflow-x: auto;
 }
@@ -830,6 +831,7 @@ flex-direction: column;
 margin-left: 0;
 justify-content: flex-start;
 width: 100%;
+flex: 0 0 100%;
 flex-wrap: wrap;
 overflow-x: visible;
 }
