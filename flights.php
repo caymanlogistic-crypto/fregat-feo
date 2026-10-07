@@ -777,37 +777,37 @@ display: flex;
 align-items: center;
 justify-content: space-between;
 gap: 16px;
-flex-wrap: wrap;
+flex-wrap: nowrap;
 margin-bottom: 15px;
 }
 .flights-list-header h2 {
 margin: 0;
-flex: 0 0 100%;
 }
 .flights-list-filters {
 display: flex;
 align-items: center;
 justify-content: flex-end;
 flex-wrap: nowrap;
-gap: 10px;
-width: 100%;
-margin-left: 0;
+gap: 6px;
+flex: 1;
+width: auto;
+margin-left: auto;
 padding-bottom: 2px;
 overflow-x: auto;
 }
 .flight-text-filter {
-width: 200px;
-min-width: 180px;
-padding: 7px 10px;
+width: 140px;
+min-width: 140px;
+padding: 6px 8px;
 border: 1px solid #ced4da;
 border-radius: 4px;
-font-size: 14px;
+font-size: 12px;
 }
 .flight-filter-toggle {
 display: inline-flex;
 align-items: center;
-gap: 8px;
-font-size: 14px;
+gap: 4px;
+font-size: 12px;
 font-weight: 500;
 white-space: nowrap;
 cursor: pointer;
