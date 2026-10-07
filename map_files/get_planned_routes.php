@@ -2,6 +2,7 @@
 error_reporting(0);
 ini_set('display_errors', 0);
 require_once __DIR__ . '/bootstrap.php';
+require_once __DIR__ . '/Support/planned_route_retention.php';
 header('Content-Type: application/json; charset=utf-8');
 
 function safeJson(array $payload): void
@@ -102,6 +103,13 @@ try {
     }
 
     $managerSelect = $managerColumn ? "f.$managerColumn AS assigned_manager_id" : 'NULL AS assigned_manager_id';
+    $retentionReady = plannedRouteRetentionTableExists($pdo);
+    $retentionSelect = $retentionReady
+        ? 'prr.expires_at AS retention_expires_at, prr.warning_sent_at AS retention_warning_sent_at'
+        : 'NULL AS retention_expires_at, NULL AS retention_warning_sent_at';
+    $retentionJoin = $retentionReady
+        ? 'LEFT JOIN planned_route_retention prr ON prr.flight_id = f.id'
+        : '';
 
     $warehouseNameSelectSource = $warehouseNameColumn ? ('ws.`' . str_replace('`', '``', $warehouseNameColumn) . '`') : 'NULL';
     $warehouseNameSelectDest = $warehouseNameColumn ? ('wd.`' . str_replace('`', '``', $warehouseNameColumn) . '`') : 'NULL';
@@ -123,6 +131,7 @@ try {
                f.planned_start_date_to,
                f.actual_start_date,
                f.actual_end_date,
+               {$retentionSelect},
                $managerSelect,
                CONCAT(COALESCE(d.vehicle_make_plate, ''), CASE WHEN d.full_name IS NOT NULL AND d.full_name <> '' THEN CONCAT(' (', d.full_name, ')') ELSE '' END) AS driver_label,
                {$warehouseNameSelectSource} AS source_warehouse_name,
@@ -131,6 +140,7 @@ try {
         LEFT JOIN drivers d ON d.id = f.driver_id
         LEFT JOIN warehouses ws ON ws.id = f.source_warehouse_id
         LEFT JOIN warehouses wd ON wd.id = f.destination_warehouse_id
+        {$retentionJoin}
         WHERE f.status IN ('planned_route', 'found', 'started')
     ";
 
@@ -168,6 +178,18 @@ try {
             $unloadType = 'OO';
         }
         $routeType = normalizeRouteType($row['route_type'] ?? '', $unloadType);
+        $retentionExpiresAt = trim((string)($row['retention_expires_at'] ?? ''));
+        $retentionWarning = false;
+        if ($retentionExpiresAt !== '' && (string)($row['status'] ?? '') === 'planned_route') {
+            try {
+                $retentionExpiry = plannedRouteRetentionDateTime($retentionExpiresAt);
+                $now = plannedRouteRetentionDateTime();
+                $remainingSeconds = plannedRouteRetentionBusinessSecondsBetween($now, $retentionExpiry);
+                $retentionWarning = $retentionExpiry > $now && $remainingSeconds < PLANNED_ROUTE_WARNING_HOURS * 3600;
+            } catch (Throwable $e) {
+                $retentionWarning = false;
+            }
+        }
 
         $normalized = [
             'id' => $flightId,
@@ -190,6 +212,10 @@ try {
             'planned_start_date_to' => $row['planned_start_date_to'] ?? null,
             'actual_start_date' => $row['actual_start_date'] ?? null,
             'actual_end_date' => $row['actual_end_date'] ?? null,
+            'retention_expires_at' => $retentionExpiresAt !== '' ? $retentionExpiresAt : null,
+            'retention_expires_label' => $retentionExpiresAt !== '' ? plannedRouteRetentionFormat($retentionExpiresAt) : '',
+            'retention_warning' => $retentionWarning,
+            'retention_warning_sent_at' => $row['retention_warning_sent_at'] ?? null,
             'assigned_manager_id' => isset($row['assigned_manager_id']) ? (int)$row['assigned_manager_id'] : null,
             'total_kg' => getTotalKgByIds($pdo, $zayIds, $massField),
         ];

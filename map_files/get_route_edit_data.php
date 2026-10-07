@@ -2,6 +2,7 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/bootstrap.php';
+require_once __DIR__ . '/Support/planned_route_retention.php';
 
 if (!headers_sent()) {
     header('Content-Type: application/json; charset=UTF-8');
@@ -19,6 +20,13 @@ if ($routeId <= 0) {
 }
 
 try {
+    $retentionReady = plannedRouteRetentionTableExists($pdo);
+    $retentionSelect = $retentionReady
+        ? 'prr.expires_at AS retention_expires_at, prr.warning_sent_at AS retention_warning_sent_at,'
+        : 'NULL AS retention_expires_at, NULL AS retention_warning_sent_at,';
+    $retentionJoin = $retentionReady
+        ? 'LEFT JOIN planned_route_retention prr ON prr.flight_id = f.id'
+        : '';
     $sql = "
         SELECT
             f.id,
@@ -36,8 +44,11 @@ try {
             f.legal_entity_code,
             f.unload_type,
             f.source_warehouse_id,
-            f.destination_warehouse_id
+            f.destination_warehouse_id,
+            {$retentionSelect}
+            f.block_date
         FROM flights f
+        {$retentionJoin}
         WHERE f.id = :id
         LIMIT 1
     ";
@@ -48,6 +59,9 @@ try {
         echo json_encode(['success' => false, 'error' => 'Рейс не найден'], JSON_UNESCAPED_UNICODE);
         exit;
     }
+
+    $expiresAt = trim((string)($row['retention_expires_at'] ?? ''));
+    $row['retention_expires_label'] = $expiresAt !== '' ? plannedRouteRetentionFormat($expiresAt) : '';
 
     echo json_encode(['success' => true, 'route' => $row], JSON_UNESCAPED_UNICODE);
 } catch (Throwable $e) {

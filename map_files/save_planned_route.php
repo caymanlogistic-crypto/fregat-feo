@@ -4,6 +4,7 @@ ini_set('display_errors', 0);
 require_once __DIR__ . '/bootstrap.php';
 require_once __DIR__ . '/Support/max_notify.php';
 require_once __DIR__ . '/Support/warehouse_movements.php';
+require_once __DIR__ . '/Support/planned_route_retention.php';
 header('Content-Type: application/json; charset=utf-8');
 if (function_exists('opcache_invalidate')) {
     @opcache_invalidate(__FILE__, true);
@@ -1219,7 +1220,13 @@ try {
             ':planned_to' => $normalized['planned_start_date_to'],
             ':driver_id' => $normalized['driver_id'],
         ]);
-        jsonOut(['success' => true, 'id' => (int)$pdo->lastInsertId(), 'message' => 'Маршрут создан']);
+        $newRouteId = (int)$pdo->lastInsertId();
+        try {
+            plannedRouteRetentionSchedule($pdo, $newRouteId, plannedRouteRetentionDateTime(), true);
+        } catch (Throwable $retentionError) {
+            mapError('planned route retention create failed', ['flight_id' => $newRouteId, 'error' => $retentionError->getMessage()]);
+        }
+        jsonOut(['success' => true, 'id' => $newRouteId, 'message' => 'Маршрут создан']);
     }
 
     if ($routeId <= 0) {
@@ -1230,6 +1237,22 @@ try {
         jsonOut(['success' => false, 'message' => 'Рейс не найден']);
     }
 
+    if ($action === 'extend_retention') {
+        if ((string)$flight['status'] !== STATUS_PLANNED) {
+            jsonOut(['success' => false, 'message' => 'Продление доступно только для планируемого рейса']);
+        }
+        $expiresAt = plannedRouteRetentionExtend($pdo, $routeId);
+        if ($expiresAt === null) {
+            jsonOut(['success' => false, 'message' => 'Срок хранения рейса ещё не инициализирован']);
+        }
+        jsonOut([
+            'success' => true,
+            'message' => 'Хранение продлено ещё на 24 рабочих часа',
+            'retention_expires_at' => $expiresAt,
+            'retention_expires_label' => plannedRouteRetentionFormat($expiresAt),
+        ]);
+    }
+
     if ($action === 'delete_route') {
         if ((string)$flight['status'] !== STATUS_PLANNED) {
             jsonOut(['success' => false, 'message' => 'Удаление доступно только для ПЛАНИРУЕМЫЙ']);
@@ -1237,6 +1260,9 @@ try {
         [$title, $manager] = buildCompactFlightContext($pdo, $flight, $routeId);
         $stmt = $pdo->prepare('DELETE FROM flights WHERE id = :id AND status = :status');
         $stmt->execute([':id' => $routeId, ':status' => STATUS_PLANNED]);
+        if ($stmt->rowCount() > 0) {
+            plannedRouteRetentionDeleteState($pdo, $routeId);
+        }
         $unloadLine = buildUnloadLine($flight);
         $routeTypeLine = buildRouteTypeLine($pdo, $flight);
         $notifyResult = sendMaxNotification(
@@ -1540,6 +1566,11 @@ try {
         }
 
         if ($target === STATUS_PLANNED) {
+            try {
+                plannedRouteRetentionSchedule($pdo, $routeId, plannedRouteRetentionDateTime(), true);
+            } catch (Throwable $retentionError) {
+                mapError('planned route retention reset failed', ['flight_id' => $routeId, 'error' => $retentionError->getMessage()]);
+            }
             [$title, $manager] = buildCompactFlightContext($pdo, $after, $routeId);
             $notifyResult = sendMaxNotification(
                 "**#{$routeId} {$title}**\n" .

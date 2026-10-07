@@ -212,6 +212,13 @@ $t = static function (string $key, string $fallback): string {
             <button class="route-action-btn route-edit-btn route-action-main" id="flightEditSaveBtn"><?= $t('route.action.save_update.button', 'Сохранить/Обновить') ?></button>
         </div>
 
+        <div class="workflow-section workflow-card workflow-card-retention" id="workflowRetentionWrap" style="display:none;">
+            <div class="workflow-title">Автоматическое удаление</div>
+            <div class="workflow-desc" id="flightRetentionDeadline">Срок хранения загружается…</div>
+            <div class="retention-action-status" id="flightRetentionStatus" style="display:none;"></div>
+            <button class="route-action-btn route-retention-btn route-action-main" id="flightEditExtendRetentionBtn">Оставить ещё на 24 часа</button>
+        </div>
+
         <div class="workflow-section workflow-card workflow-card-lifecycle" id="workflowLifecycleSection">
 
             <div class="workflow-action workflow-action-primary workflow-action-found" id="workflowToFoundWrap">

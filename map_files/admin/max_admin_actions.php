@@ -42,6 +42,8 @@ function demoContext(): array {
         'removed_ids_line' => 'Исключенные заявки: 267619','added_ids_line' => 'Добавленные заявки: 123456',
         'changes_block' => "Заявки: 2 → 1\nВес: 468 кг брутто → 153 кг брутто\nВодитель: М139МО774(Иванов) → К769СТ134(Петров)",
         'route_type_line' => 'Вывоз на склад: Склад Феодосия','message' => 'Тестовое сообщение MAX',
+        'requests' => '123123, 123124, 412412','request_ids' => '123123, 123124, 412412',
+        'delete_at' => '12.10.2026 в 13:00','expires_at' => '12.10.2026 в 13:00',
     ];
 }
 function templateCatalog(): array {
@@ -54,6 +56,7 @@ function templateCatalog(): array {
         'route_diff_found' => ['title' => 'Изменение в сформированном рейсе','description' => 'Отправляется при изменении данных рейса в статусе «Рейс сформирован»','template' => "**⚠️ ИЗМЕНЕНИЕ В СФОРМИРОВАННОМ РЕЙСЕ ⚠️**\n#{route_id} {route_title}\nВодитель: {driver_before} → {driver_after}\nДаты: {planned_range_before} → {planned_range_after}\nЗаявки: {requests_count_before} → {requests_count_after}\nВес: {weight_before} → {weight_after}\n{removed_ids_line}\n{added_ids_line}\nРейс закреплен: {manager}"],
         'route_diff_started' => ['title' => 'Изменение в выполняемом рейсе','description' => 'Отправляется при изменении данных рейса в статусе «Вывоз начался»','template' => "Изменён рейс #{route_id} во время выполнения\n{route_title} | {manager}\n{changes_block}\nРейс находится в выполнении. Проверьте корректность изменений."],
         'route_deleted' => ['title' => 'Удаление маршрута','description' => 'Отправляется при удалении планируемого маршрута','template' => "#{route_id} {route_title} - Удален из системы\n{route_type_line}\nРейс закреплен: {manager}"],
+        'route_auto_delete_warning' => ['title' => 'Предупреждение об автоматическом удалении','description' => 'Однократно отправляется менее чем за 24 рабочих часа до автоматического удаления планируемого рейса','template' => "АВТ. УДАЛЕНИЕ\n#{route_id} {route_title}\nЗаявки: {requests}\nбудет удалён\n{delete_at}\nПри необходимости продлите хранение\nРейс закреплён: {manager}"],
         'route_completed' => ['title' => 'Вывоз начался → Груз сдан','description' => 'Отправляется при завершении рейса и переводе в «Груз сдан»','template' => "ТС ПРИБЫЛО НА РАЗГРУЗКУ\n───────────────────\n{route_type_line}\n{driver}\n#{route_id} — {route_title}\n> 💡 *Напоминаю: для оплаты подрядчику нужен полный пакет документов (диагностическая карта, путевой лист и т.д.). Прошу не затягивать с предоставлением.*"],
         'route_control_cron' => ['title' => 'Cron-контроль рейсов','description' => 'Отправляется cron-контролем рейсов (утро/вечер) для проблемных рейсов на сегодня','template' => '{message}'],
         'test_message' => ['title' => 'Тестовое сообщение','description' => 'Отправляется вручную из админки для проверки доставки и форматирования','template' => "Тест MAX уведомления\n> 💡 *Проверка markdown-цитаты.*"],

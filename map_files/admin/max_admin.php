@@ -83,6 +83,11 @@ function templateCatalog(): array {
             'description' => 'Отправляется при удалении планируемого маршрута',
             'template' => "#{route_id} {route_title} - Удален из системы\n{route_type_line}\nРейс закреплен: {manager}",
         ],
+        'route_auto_delete_warning' => [
+            'title' => 'Предупреждение об автоматическом удалении',
+            'description' => 'Однократно отправляется менее чем за 24 рабочих часа до автоматического удаления планируемого рейса',
+            'template' => "АВТ. УДАЛЕНИЕ\n#{route_id} {route_title}\nЗаявки: {requests}\nбудет удалён\n{delete_at}\nПри необходимости продлите хранение\nРейс закреплён: {manager}",
+        ],
         'route_completed' => [
             'title' => 'Вывоз начался → Груз сдан',
             'description' => 'Отправляется при завершении рейса и переводе в «Груз сдан»',
@@ -144,6 +149,10 @@ function demoContext(): array {
         'driver_before' => 'М139МО774(Иванов)',
         'driver_after' => 'К769СТ134(Петров)',
         'manager' => 'Карина',
+        'requests' => '123123, 123124, 412412',
+        'request_ids' => '123123, 123124, 412412',
+        'delete_at' => '12.10.2026 в 13:00',
+        'expires_at' => '12.10.2026 в 13:00',
         'requests_count' => '2',
         'requests_count_before' => '2',
         'requests_count_after' => '1',

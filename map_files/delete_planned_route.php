@@ -2,6 +2,7 @@
 error_reporting(0);
 ini_set('display_errors', 0);
 require_once __DIR__ . '/bootstrap.php';
+require_once __DIR__ . '/Support/planned_route_retention.php';
 header('Content-Type: application/json; charset=utf-8');
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
@@ -19,6 +20,9 @@ try {
     }
     $stmt = $pdo->prepare("DELETE FROM flights WHERE id = :id AND status = 'planned_route'");
     $stmt->execute([':id' => $id]);
+    if ($stmt->rowCount() > 0) {
+        plannedRouteRetentionDeleteState($pdo, $id);
+    }
     echo json_encode(['success' => true, 'message' => 'Маршрут удален'], JSON_UNESCAPED_UNICODE);
 } catch (Exception $e) {
     echo json_encode(['success' => false, 'message' => 'Ошибка удаления: ' . $e->getMessage()], JSON_UNESCAPED_UNICODE);

@@ -4,6 +4,7 @@ ini_set('display_errors', 0);
 
 require_once dirname(__DIR__) . '/bootstrap.php';
 require_once dirname(__DIR__) . '/Support/max_notify.php';
+require_once dirname(__DIR__) . '/Support/planned_route_retention.php';
 
 header('Content-Type: application/json; charset=utf-8');
 
@@ -104,6 +105,8 @@ try {
         throw new RuntimeException('Database connection is not initialized');
     }
 
+    $retentionResult = plannedRouteRetentionProcess($pdo, true);
+
     $mode = trim((string)($_GET['mode'] ?? ''));
     if ($mode === '') {
         $hour = (int)date('G');
@@ -154,7 +157,7 @@ try {
     $rows = $stmt ? $stmt->fetchAll(PDO::FETCH_ASSOC) : [];
 
     if (empty($rows)) {
-        out(['success' => true, 'mode' => $mode, 'sent' => 0, 'message' => 'Проблемных рейсов нет']);
+        out(['success' => true, 'mode' => $mode, 'sent' => 0, 'message' => 'Проблемных рейсов нет', 'retention' => $retentionResult]);
     }
 
     $header = $mode === 'morning' ? 'MAX: контроль вывоза на сегодня' : 'MAX: вечерний контроль вывоза';
@@ -203,7 +206,8 @@ try {
         'mode' => $mode,
         'sent' => 1,
         'notify_success' => (bool)$notify['success'],
-        'notify_error' => $notify['error']
+        'notify_error' => $notify['error'],
+        'retention' => $retentionResult
     ]);
 } catch (Throwable $e) {
     mapError('notify_route_control fatal', ['error' => $e->getMessage()]);

@@ -11,6 +11,7 @@ const UNLOAD_ADDRESS = '\u041c\u043e\u0441\u043a\u043e\u0432\u0441\u043a\u0430\u
 // === TRACKERS AND COLLECTIONS ===
 let trackerPlacemarks = [];
 let trackerUpdateInterval = null;
+let plannedRouteRetentionInterval = null;
 let isUpdatingTrackers = false;
 let showTransport = true;
 let transportDisplayMode = 'active';
@@ -2045,6 +2046,7 @@ async function openFlightEditModal(routeId, source) {
     }
     syncRouteTypeFieldsVisibility(initialRouteType);
     if (statusInput) statusInput.value = currentEditingMeta.status;
+    updateFlightRetentionUi(currentEditingMeta);
     if (transferFoundBtn) {
         transferFoundBtn.style.display = source === 'planned' ? 'inline-flex' : 'none';
     }
@@ -2083,6 +2085,7 @@ function applyLifecycleButtons(status) {
         toFoundBack: document.getElementById('workflowBackToFoundWrap'),
         toCompleted: document.getElementById('workflowToCompletedWrap'),
         startedInfo: document.getElementById('workflowStartedInfoWrap'),
+        retentionWrap: document.getElementById('workflowRetentionWrap'),
         deleteWrap: document.getElementById('workflowDeleteWrap')
     };
     if (map.updateSection) {
@@ -2115,6 +2118,7 @@ function applyLifecycleButtons(status) {
         if (updateDesc) setSafeStaticHtml(updateDesc, uiText('route.workflow.update.desc', 'Изменения дат автоматически фиксируются в МАКС.'));
         if (saveBtn) saveBtn.textContent = 'Сохранить изменения';
         if (map.updateSection) map.updateSection.style.display = 'block';
+        if (map.retentionWrap) map.retentionWrap.style.display = currentEditingMeta && currentEditingMeta.retention_expires_at ? 'block' : 'none';
         if (map.toFound) map.toFound.style.display = 'block';
         if (map.deleteWrap) map.deleteWrap.style.display = 'block';
     } else if (status === 'found') {
@@ -2310,6 +2314,80 @@ async function postRouteAction(action, payload) {
         throw new Error('Сервер вернул не JSON. Подробности в консоли.');
     }
     return data;
+}
+
+function updateFlightRetentionUi(meta) {
+    const deadline = document.getElementById('flightRetentionDeadline');
+    const status = document.getElementById('flightRetentionStatus');
+    if (status) {
+        status.style.display = 'none';
+        status.textContent = '';
+        status.style.removeProperty('color');
+    }
+    if (!deadline) return;
+    const label = String(meta?.retention_expires_label || '').trim();
+    deadline.textContent = label
+        ? `Рейс будет автоматически удалён ${label}. Суббота и воскресенье не учитываются.`
+        : 'Срок автоматического удаления ещё не инициализирован.';
+}
+
+async function extendPlannedRouteRetention() {
+    const button = document.getElementById('flightEditExtendRetentionBtn');
+    const status = document.getElementById('flightRetentionStatus');
+    const routeId = Number(document.getElementById('edit_flight_id')?.value || 0);
+    if (routeId <= 0 || !currentEditingMeta || currentEditingMeta.status !== 'planned_route') return;
+
+    const previousText = button ? button.textContent : '';
+    if (button) {
+        button.disabled = true;
+        button.textContent = 'Продление…';
+    }
+    try {
+        const result = await postRouteAction('extend_retention', { id: routeId });
+        if (!result.success) {
+            throw new Error(result.message || 'Не удалось продлить хранение');
+        }
+        currentEditingMeta.retention_expires_at = result.retention_expires_at;
+        currentEditingMeta.retention_expires_label = result.retention_expires_label;
+        currentEditingMeta.retention_warning = false;
+        const key = String(routeId);
+        routeCardsMeta[key] = { ...(routeCardsMeta[key] || {}), ...currentEditingMeta };
+        updateFlightRetentionUi(currentEditingMeta);
+        if (status) {
+            status.style.removeProperty('color');
+            status.textContent = result.message || 'Хранение продлено ещё на 24 рабочих часа';
+            status.style.display = 'block';
+        }
+        await loadPlannedRoutes();
+    } catch (error) {
+        if (status) {
+            status.textContent = error instanceof Error ? error.message : 'Не удалось продлить хранение';
+            status.style.display = 'block';
+            status.style.color = '#842029';
+        }
+    } finally {
+        if (button) {
+            button.disabled = false;
+            button.textContent = previousText || 'Оставить ещё на 24 часа';
+        }
+    }
+}
+
+async function processPlannedRouteRetention() {
+    try {
+        const response = await fetch('map_files/process_planned_route_retention.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: '{}'
+        });
+        if (!response.ok) return;
+        const result = await response.json();
+        if (result && result.success && (Number(result.deleted || 0) > 0 || Number(result.warning_due || 0) > 0)) {
+            await loadPlannedRoutes();
+        }
+    } catch (error) {
+        console.error('planned route retention heartbeat failed:', error);
+    }
 }
 
 /**
@@ -3118,11 +3196,14 @@ function loadPlannedRoutes() {
                 const routeCost = (r.cost !== null && r.cost !== undefined && r.cost !== '') ? r.cost : (routeMeta.cost ?? null);
                 const costPart = routeCost ? (UI.bullet + parseFloat(routeCost).toLocaleString('ru-RU') + ' \u20BD') : '';
                 const unloadPart = getRouteTypeCompactSuffix(r.route_type || routeMeta.route_type, r.unload_type || routeMeta.unload_type);
+                const expiryPart = r.retention_warning && r.retention_expires_label
+                    ? `<span class="route-expiry-warning">${UI.bullet}Удал. ${escapeHtml(String(r.retention_expires_label).replace(/\.\d{4} в/, ' в'))}</span>`
+                    : '';
                 return `
                     <div class="route-item route-item-planned" onclick="selectRoute('${r.zayavki_ids}', '${routeCost || ''}', this)" ondblclick="openFlightEditModal(${r.id}, 'planned')" data-route-id="${r.id}" data-route-source="planned" data-route-editable="1">
                         <div class="route-head"><div class="route-name">#${r.id} ${resolveRouteTitle(r) || (UI.routePrefix + r.id)}</div>${buildRouteManageMenu(r.id, 'planned')}</div>
                         <div class="route-meta route-timeline">${driverLine}</div>
-                        <div class="route-meta route-metrics">${zayCount} \u0437\u0430\u044f\u0432.${UI.bullet}${Math.round(totalKg).toLocaleString('ru-RU')} ${weightUnitLabel}${costPart}${unloadPart}</div>
+                        <div class="route-meta route-metrics">${zayCount} \u0437\u0430\u044f\u0432.${UI.bullet}${Math.round(totalKg).toLocaleString('ru-RU')} ${weightUnitLabel}${costPart}${unloadPart}${expiryPart}</div>
                     </div>
                 `;
             }).join('');
@@ -3709,6 +3790,7 @@ function init() {
     const backToFoundBtn = document.getElementById('flightEditBackToFoundBtn');
     const toCompletedBtn = document.getElementById('flightEditToCompletedBtn');
     const deleteBtn = document.getElementById('flightEditDeleteBtn');
+    const extendRetentionBtn = document.getElementById('flightEditExtendRetentionBtn');
     const closeTopBtn = document.getElementById('flightEditCloseTopBtn');
     if (saveEditBtn) saveEditBtn.addEventListener('click', saveFlightEdit);
     if (cancelEditBtn) cancelEditBtn.addEventListener('click', closeFlightEditModal);
@@ -3762,6 +3844,7 @@ function init() {
             if (routeId > 0) deleteRoute(routeId);
         });
     }
+    if (extendRetentionBtn) extendRetentionBtn.addEventListener('click', extendPlannedRouteRetention);
     if (closeTopBtn) closeTopBtn.addEventListener('click', closeFlightEditModal);
     const routeTypeInput = document.getElementById('edit_route_type');
     if (routeTypeInput) {
@@ -3828,9 +3911,12 @@ if (startCancelBtn) startCancelBtn.addEventListener('click', closeStartConfirmMo
     
     // === AUTO REFRESH TRACKERS EVERY 60 SECONDS ===
     trackerUpdateInterval = setInterval(fetchTrackers, 60000);
+    plannedRouteRetentionInterval = setInterval(processPlannedRouteRetention, 60000);
+    processPlannedRouteRetention();
     
     window.addEventListener('beforeunload', () => {
         if (trackerUpdateInterval) clearInterval(trackerUpdateInterval);
+        if (plannedRouteRetentionInterval) clearInterval(plannedRouteRetentionInterval);
     });
     
     updateMap();
