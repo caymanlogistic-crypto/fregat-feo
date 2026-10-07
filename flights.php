@@ -777,22 +777,22 @@ display: flex;
 align-items: center;
 justify-content: space-between;
 gap: 16px;
-flex-wrap: wrap;
+flex-wrap: nowrap;
 margin-bottom: 15px;
 }
 .flights-list-header h2 {
 margin: 0;
-flex: 0 0 100%;
+flex: 0 0 auto;
 }
 .flights-list-filters {
 display: flex;
 align-items: center;
-justify-content: flex-start;
+justify-content: flex-end;
 flex-wrap: nowrap;
 gap: 6px;
-flex: none;
-width: calc(100% - 250px);
-margin-left: 250px;
+flex: 1;
+width: auto;
+margin-left: auto;
 padding-bottom: 2px;
 overflow-x: auto;
 }
