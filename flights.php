@@ -796,6 +796,11 @@ margin-left: 250px;
 padding-bottom: 2px;
 overflow-x: auto;
 }
+.flight-filter-prefix {
+font-size: 12px;
+font-weight: 600;
+white-space: nowrap;
+}
 .flight-text-filter {
 width: 140px;
 min-width: 140px;
@@ -1043,21 +1048,22 @@ style="width: 100%;"
 <h2>Список рейсов</h2>
 <div class="flights-list-filters" role="group" aria-label="Фильтры списка рейсов">
 <input type="search" id="flightTextFilter" class="flight-text-filter" placeholder="Фильтр по рейсам…" aria-label="Фильтр по содержимому рейсов" aria-controls="flightsTable" autocomplete="off">
+<span class="flight-filter-prefix">Скрыть:</span>
 <label class="flight-filter-toggle">
-<input type="checkbox" class="flight-status-filter" data-hide-status="planned_route" aria-controls="flightsTable">
-Скрыть планируемые
+<input type="checkbox" class="flight-status-filter" data-hide-status="planned_route" aria-label="Скрыть планируемые" aria-controls="flightsTable">
+планируемые
 </label>
 <label class="flight-filter-toggle">
-<input type="checkbox" class="flight-status-filter" data-hide-status="found" aria-controls="flightsTable">
-Скрыть сформированные
+<input type="checkbox" class="flight-status-filter" data-hide-status="found" aria-label="Скрыть сформированные" aria-controls="flightsTable">
+сформированные
 </label>
 <label class="flight-filter-toggle">
-<input type="checkbox" class="flight-status-filter" data-hide-status="started" aria-controls="flightsTable">
-Скрыть «Вывоз начался»
+<input type="checkbox" class="flight-status-filter" data-hide-status="started" aria-label="Скрыть «Вывоз начался»" aria-controls="flightsTable">
+«Вывоз начался»
 </label>
 <label class="flight-filter-toggle">
-<input type="checkbox" class="flight-status-filter" data-hide-status="completed" aria-controls="flightsTable">
-Скрыть «Груз сдан»
+<input type="checkbox" class="flight-status-filter" data-hide-status="completed" aria-label="Скрыть «Груз сдан»" aria-controls="flightsTable">
+«Груз сдан»
 </label>
 <label class="flight-filter-toggle">
 <input type="checkbox" id="showLegacyFlights" aria-controls="flightsTable">
