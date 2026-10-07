@@ -782,20 +782,38 @@ margin-bottom: 15px;
 .flights-list-header h2 {
 margin: 0;
 }
-.legacy-flights-toggle {
+.flights-list-filters {
+display: flex;
+align-items: center;
+justify-content: flex-end;
+flex-wrap: wrap;
+gap: 10px 16px;
+margin-left: auto;
+}
+.flight-text-filter {
+width: 220px;
+min-width: 180px;
+padding: 7px 10px;
+border: 1px solid #ced4da;
+border-radius: 4px;
+font-size: 14px;
+}
+.flight-filter-toggle {
 display: inline-flex;
 align-items: center;
 gap: 8px;
-margin-left: auto;
 font-size: 14px;
 font-weight: 500;
 white-space: nowrap;
 cursor: pointer;
 }
-.legacy-flights-toggle input {
+.flight-filter-toggle input {
 margin: 0;
 }
 body:not(.show-legacy-flights) tr.legacy-flight-row {
+display: none !important;
+}
+.flight-filter-hidden {
 display: none !important;
 }
 @media (max-width: 720px) {
@@ -803,8 +821,15 @@ display: none !important;
 align-items: flex-start;
 flex-direction: column;
 }
-.legacy-flights-toggle {
+.flights-list-filters {
 margin-left: 0;
+justify-content: flex-start;
+width: 100%;
+}
+.flight-text-filter {
+width: 100%;
+}
+.flight-filter-toggle {
 white-space: normal;
 }
 }
@@ -1007,10 +1032,29 @@ style="width: 100%;"
 <div class="card">
 <div class="flights-list-header">
 <h2>Список рейсов</h2>
-<label class="legacy-flights-toggle">
+<div class="flights-list-filters" role="group" aria-label="Фильтры списка рейсов">
+<input type="search" id="flightTextFilter" class="flight-text-filter" placeholder="Фильтр по рейсам…" aria-label="Фильтр по содержимому рейсов" aria-controls="flightsTable" autocomplete="off">
+<label class="flight-filter-toggle">
+<input type="checkbox" class="flight-status-filter" data-hide-status="planned_route" aria-controls="flightsTable">
+Скрыть планируемые
+</label>
+<label class="flight-filter-toggle">
+<input type="checkbox" class="flight-status-filter" data-hide-status="found" aria-controls="flightsTable">
+Скрыть сформированные
+</label>
+<label class="flight-filter-toggle">
+<input type="checkbox" class="flight-status-filter" data-hide-status="started" aria-controls="flightsTable">
+Скрыть «Вывоз начался»
+</label>
+<label class="flight-filter-toggle">
+<input type="checkbox" class="flight-status-filter" data-hide-status="completed" aria-controls="flightsTable">
+Скрыть «Груз сдан»
+</label>
+<label class="flight-filter-toggle">
 <input type="checkbox" id="showLegacyFlights" aria-controls="flightsTable">
 Показать старые рейсы (ID &lt; <?= LEGACY_FLIGHT_CUTOFF_ID ?>)
 </label>
+</div>
 </div>
 <div class="table-wrapper">
 <table class="data-table" id="flightsTable">
@@ -1036,7 +1080,7 @@ style="width: 100%;"
 <tbody>
 <?php foreach ($flights as $flight): ?>
 <?php $isLegacyFlight = (int)$flight['id'] < LEGACY_FLIGHT_CUTOFF_ID; ?>
-<tr class="group-header<?= $isLegacyFlight ? ' legacy-flight-row' : '' ?>" data-flight-id="<?= (int)$flight['id'] ?>" onclick="toggleFlight('details_<?= $flight['id'] ?>', event)">
+<tr class="group-header<?= $isLegacyFlight ? ' legacy-flight-row' : '' ?>" data-flight-id="<?= (int)$flight['id'] ?>" data-status="<?= htmlspecialchars((string)$flight['status'], ENT_QUOTES, 'UTF-8') ?>" onclick="toggleFlight('details_<?= $flight['id'] ?>', event)">
 <td style="text-align: center;">▶</td>
 <td><strong>#<?= $flight['id'] ?></strong></td>
 <td>
@@ -1258,11 +1302,48 @@ let currentFormToken = '<?= $current_token ?>';
 let validationTimeout = null;
 let lastValidationResult = { found_count: 0, total_count: 0, not_found: [], invalid_format: [] };
 const legacyFlightsToggle = document.getElementById('showLegacyFlights');
-if (legacyFlightsToggle) {
-legacyFlightsToggle.addEventListener('change', function() {
-document.body.classList.toggle('show-legacy-flights', this.checked);
+const flightTextFilter = document.getElementById('flightTextFilter');
+const flightStatusFilters = document.querySelectorAll('.flight-status-filter');
+function normalizeFlightFilterText(value) {
+return String(value || '').toLocaleLowerCase('ru-RU').replace(/\s+/g, ' ').trim();
+}
+function applyFlightFilters() {
+const showLegacyFlights = legacyFlightsToggle && legacyFlightsToggle.checked;
+const searchText = normalizeFlightFilterText(flightTextFilter ? flightTextFilter.value : '');
+const hiddenStatuses = new Set(
+Array.from(flightStatusFilters)
+.filter(input => input.checked)
+.map(input => input.dataset.hideStatus)
+);
+document.body.classList.toggle('show-legacy-flights', Boolean(showLegacyFlights));
+document.querySelectorAll('#flightsTable > tbody > tr.group-header[data-flight-id]').forEach(headerRow => {
+const detailsRow = document.getElementById('details_' + headerRow.dataset.flightId);
+const flightText = normalizeFlightFilterText(
+headerRow.textContent + ' ' + (detailsRow ? detailsRow.textContent : '')
+);
+const isLegacyFlight = headerRow.classList.contains('legacy-flight-row');
+const isVisible = (showLegacyFlights || !isLegacyFlight)
+&& !hiddenStatuses.has(headerRow.dataset.status)
+&& (!searchText || flightText.includes(searchText));
+headerRow.classList.toggle('flight-filter-hidden', !isVisible);
+if (detailsRow) {
+detailsRow.classList.toggle('flight-filter-hidden', !isVisible);
+if (!isVisible) {
+detailsRow.style.display = 'none';
+const arrow = headerRow.querySelector('td:first-child');
+if (arrow) arrow.textContent = '▶';
+}
+}
 });
 }
+if (legacyFlightsToggle) {
+legacyFlightsToggle.addEventListener('change', applyFlightFilters);
+}
+if (flightTextFilter) {
+flightTextFilter.addEventListener('input', applyFlightFilters);
+}
+flightStatusFilters.forEach(input => input.addEventListener('change', applyFlightFilters));
+applyFlightFilters();
 function clearForm() {
 document.getElementById('zayavki').value = '';
 document.getElementById('unload_type').value = 'OO';
