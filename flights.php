@@ -801,6 +801,15 @@ font-size: 12px;
 font-weight: 600;
 white-space: nowrap;
 }
+.flight-sort {
+width: 150px;
+min-width: 150px;
+padding: 6px 8px;
+border: 1px solid #ced4da;
+border-radius: 4px;
+background: #ffffff;
+font-size: 12px;
+}
 .flight-text-filter {
 width: 140px;
 min-width: 140px;
@@ -841,6 +850,9 @@ flex-wrap: wrap;
 overflow-x: visible;
 }
 .flight-text-filter {
+width: 100%;
+}
+.flight-sort {
 width: 100%;
 }
 .flight-filter-toggle {
@@ -1047,6 +1059,12 @@ style="width: 100%;"
 <div class="flights-list-header">
 <h2>Список рейсов</h2>
 <div class="flights-list-filters" role="group" aria-label="Фильтры списка рейсов">
+<select id="flightSort" class="flight-sort" aria-label="Сортировка рейсов" aria-controls="flightsTable">
+<option value="id_desc">ID: сначала новые</option>
+<option value="id_asc">ID: сначала старые</option>
+<option value="status">По статусу</option>
+<option value="manager">По менеджеру</option>
+</select>
 <input type="search" id="flightTextFilter" class="flight-text-filter" placeholder="Фильтр по рейсам…" aria-label="Фильтр по содержимому рейсов" aria-controls="flightsTable" autocomplete="off">
 <span class="flight-filter-prefix">Скрыть:</span>
 <label class="flight-filter-toggle">
@@ -1094,8 +1112,14 @@ style="width: 100%;"
 </thead>
 <tbody>
 <?php foreach ($flights as $flight): ?>
-<?php $isLegacyFlight = (int)$flight['id'] < LEGACY_FLIGHT_CUTOFF_ID; ?>
-<tr class="group-header<?= $isLegacyFlight ? ' legacy-flight-row' : '' ?>" data-flight-id="<?= (int)$flight['id'] ?>" data-status="<?= htmlspecialchars((string)$flight['status'], ENT_QUOTES, 'UTF-8') ?>" onclick="toggleFlight('details_<?= $flight['id'] ?>', event)">
+<?php
+$isLegacyFlight = (int)$flight['id'] < LEGACY_FLIGHT_CUTOFF_ID;
+$statusCode = (string)($flight['status'] ?? '');
+$statusData = $statusMap[$statusCode] ?? null;
+$statusLabel = $statusData['наименование'] ?? $statusCode;
+$managerLabel = trim((string)($flight['manager_name'] ?? ''));
+?>
+<tr class="group-header<?= $isLegacyFlight ? ' legacy-flight-row' : '' ?>" data-flight-id="<?= (int)$flight['id'] ?>" data-status="<?= htmlspecialchars($statusCode, ENT_QUOTES, 'UTF-8') ?>" data-status-label="<?= htmlspecialchars($statusLabel, ENT_QUOTES, 'UTF-8') ?>" data-manager="<?= htmlspecialchars($managerLabel, ENT_QUOTES, 'UTF-8') ?>" onclick="toggleFlight('details_<?= $flight['id'] ?>', event)">
 <td style="text-align: center;">▶</td>
 <td><strong>#<?= $flight['id'] ?></strong></td>
 <td>
@@ -1115,10 +1139,7 @@ style="width: 100%;"
 <?php endif; ?>
 </td>
 <td style="text-align: center;">
-<?php
-$statusCode = $flight['status'];
-$statusData = $statusMap[$statusCode] ?? null;
-if ($statusData):
+<?php if ($statusData):
 $styleClass = ltrim($statusData['style'], '.');
 ?>
 <span class="status-badge <?= htmlspecialchars($styleClass) ?>">
@@ -1317,10 +1338,47 @@ let currentFormToken = '<?= $current_token ?>';
 let validationTimeout = null;
 let lastValidationResult = { found_count: 0, total_count: 0, not_found: [], invalid_format: [] };
 const legacyFlightsToggle = document.getElementById('showLegacyFlights');
+const flightSort = document.getElementById('flightSort');
 const flightTextFilter = document.getElementById('flightTextFilter');
 const flightStatusFilters = document.querySelectorAll('.flight-status-filter');
+const flightsTableBody = document.querySelector('#flightsTable > tbody');
+const flightSortCollator = new Intl.Collator('ru', { sensitivity: 'base', numeric: true });
 function normalizeFlightFilterText(value) {
 return String(value || '').toLocaleLowerCase('ru-RU').replace(/\s+/g, ' ').trim();
+}
+function compareFlightRows(firstRow, secondRow) {
+const sortMode = flightSort ? flightSort.value : 'id_desc';
+const firstId = Number(firstRow.dataset.flightId) || 0;
+const secondId = Number(secondRow.dataset.flightId) || 0;
+if (sortMode === 'id_asc') return firstId - secondId;
+if (sortMode === 'status') {
+const statusComparison = flightSortCollator.compare(firstRow.dataset.statusLabel || '', secondRow.dataset.statusLabel || '');
+return statusComparison || secondId - firstId;
+}
+if (sortMode === 'manager') {
+const firstManager = (firstRow.dataset.manager || '').trim();
+const secondManager = (secondRow.dataset.manager || '').trim();
+if (!firstManager && secondManager) return 1;
+if (firstManager && !secondManager) return -1;
+const managerComparison = flightSortCollator.compare(firstManager, secondManager);
+return managerComparison || secondId - firstId;
+}
+return secondId - firstId;
+}
+function sortFlightRows() {
+if (!flightsTableBody) return;
+const rowPairs = Array.from(document.querySelectorAll('#flightsTable > tbody > tr.group-header[data-flight-id]'))
+.map(headerRow => ({
+headerRow,
+detailsRow: document.getElementById('details_' + headerRow.dataset.flightId)
+}))
+.sort((firstPair, secondPair) => compareFlightRows(firstPair.headerRow, secondPair.headerRow));
+const fragment = document.createDocumentFragment();
+rowPairs.forEach(({ headerRow, detailsRow }) => {
+fragment.appendChild(headerRow);
+if (detailsRow) fragment.appendChild(detailsRow);
+});
+flightsTableBody.appendChild(fragment);
 }
 function applyFlightFilters() {
 const showLegacyFlights = legacyFlightsToggle && legacyFlightsToggle.checked;
@@ -1357,7 +1415,14 @@ legacyFlightsToggle.addEventListener('change', applyFlightFilters);
 if (flightTextFilter) {
 flightTextFilter.addEventListener('input', applyFlightFilters);
 }
+if (flightSort) {
+flightSort.addEventListener('change', function() {
+sortFlightRows();
+applyFlightFilters();
+});
+}
 flightStatusFilters.forEach(input => input.addEventListener('change', applyFlightFilters));
+sortFlightRows();
 applyFlightFilters();
 function clearForm() {
 document.getElementById('zayavki').value = '';
