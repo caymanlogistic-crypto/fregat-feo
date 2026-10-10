@@ -16,6 +16,39 @@ require_once __DIR__ . '/Support/warehouse_movements.php';
 
 header('Content-Type: application/json; charset=utf-8');
 
+function warehouseStockParseIds(string $value): array
+{
+    $ids = [];
+    foreach (preg_split('/[\s,;]+/u', trim($value), -1, PREG_SPLIT_NO_EMPTY) ?: [] as $id) {
+        if (preg_match('/^\d+$/', $id) && (int)$id > 0) {
+            $ids[(int)$id] = true;
+        }
+    }
+    return $ids;
+}
+
+function warehouseStockLoadRequestMasses(PDO $pdo, array $ids): array
+{
+    if (empty($ids)) {
+        return [];
+    }
+
+    $result = [];
+    foreach (array_chunk(array_values(array_unique(array_map('intval', $ids))), 300) as $chunk) {
+        $placeholders = implode(',', array_fill(0, count($chunk), '?'));
+        $stmt = $pdo->prepare("SELECT zayavka_id, mass_netto, mass_brutto, summarnyy_obem FROM feo WHERE zayavka_id IN ({$placeholders})");
+        $stmt->execute($chunk);
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $result[(int)$row['zayavka_id']] = [
+                'mass_netto' => (float)($row['mass_netto'] ?? 0),
+                'mass_brutto' => (float)($row['mass_brutto'] ?? 0),
+                'volume' => (float)($row['summarnyy_obem'] ?? 0),
+            ];
+        }
+    }
+    return $result;
+}
+
 if (!isset($pdo) || !($pdo instanceof PDO)) {
     echo json_encode(['success' => false, 'message' => 'Database connection error']);
     exit;
@@ -75,94 +108,241 @@ try {
         exit;
     }
 
-    // ── Остатки по заявкам (netto > 0) ──
-    $stockSql = "SELECT wm.warehouse_id, wm.zayavka_id,
-        SUM(CASE WHEN wm.movement_type IN ('receipt','transfer_in') THEN COALESCE(wm.mass_netto, 0) ELSE 0 END) AS in_netto,
-        SUM(CASE WHEN wm.movement_type IN ('issue','transfer_out') THEN COALESCE(wm.mass_netto, 0) ELSE 0 END) AS out_netto,
-        SUM(CASE WHEN wm.movement_type IN ('receipt','transfer_in') THEN COALESCE(wm.mass_brutto, 0) ELSE 0 END) AS in_brutto,
-        SUM(CASE WHEN wm.movement_type IN ('issue','transfer_out') THEN COALESCE(wm.mass_brutto, 0) ELSE 0 END) AS out_brutto,
-        SUM(CASE WHEN wm.movement_type IN ('receipt','transfer_in') THEN COALESCE(wm.volume, 0) ELSE 0 END) AS in_vol,
-        SUM(CASE WHEN wm.movement_type IN ('issue','transfer_out') THEN COALESCE(wm.volume, 0) ELSE 0 END) AS out_vol
-    FROM warehouse_movements wm
-    WHERE wm.status = 'active'
-    GROUP BY wm.warehouse_id, wm.zayavka_id
-    HAVING (SUM(CASE WHEN wm.movement_type IN ('receipt','transfer_in') THEN COALESCE(wm.mass_netto, 0) ELSE 0 END) - SUM(CASE WHEN wm.movement_type IN ('issue','transfer_out') THEN COALESCE(wm.mass_netto, 0) ELSE 0 END)) > 0.0001
-        OR (SUM(CASE WHEN wm.movement_type IN ('receipt','transfer_in') THEN COALESCE(wm.mass_brutto, 0) ELSE 0 END) - SUM(CASE WHEN wm.movement_type IN ('issue','transfer_out') THEN COALESCE(wm.mass_brutto, 0) ELSE 0 END)) > 0.0001";
+    // Остатки и маршруты пересчитываются по актуальному составу flights.zayavki_ids.
+    // warehouse_movements остаётся журналом фактических операций, но удалённые из
+    // рейса заявки больше не участвуют в текущем остатке.
+    $movementSql = "SELECT
+            wm.id,
+            wm.warehouse_id,
+            wm.flight_id,
+            wm.movement_type,
+            wm.zayavka_id,
+            wm.mass_netto,
+            wm.mass_brutto,
+            wm.volume,
+            wm.movement_date,
+            f.id AS current_flight_id,
+            COALESCE(f.status, '') AS flight_status,
+            COALESCE(f.zayavki_ids, '') AS current_zayavki_ids,
+            f.source_warehouse_id,
+            f.destination_warehouse_id,
+            f.actual_start_date,
+            f.actual_end_date
+        FROM warehouse_movements wm
+        LEFT JOIN flights f ON f.id = wm.flight_id
+        WHERE wm.status = 'active'
+          AND wm.movement_type IN ('receipt', 'transfer_in', 'issue', 'transfer_out')
+        ORDER BY wm.movement_date ASC, wm.id ASC";
+    $movementRows = $pdo->query($movementSql)->fetchAll(PDO::FETCH_ASSOC);
 
-    $stockRows = $pdo->query($stockSql)->fetchAll(PDO::FETCH_ASSOC);
-    foreach ($stockRows as $r) {
-        $wid = (int)$r['warehouse_id'];
-        $netto = round((float)$r['in_netto'] - (float)$r['out_netto'], 4);
-        $brutto = round((float)$r['in_brutto'] - (float)$r['out_brutto'], 4);
-        $vol = round((float)$r['in_vol'] - (float)$r['out_vol'], 4);
-        if ($netto <= 0.0001 && $brutto <= 0.0001) continue;
-
-        if (!isset($whMap[$wid])) continue;
-        $whMap[$wid]['request_count']++;
-        $whMap[$wid]['mass_netto_sum'] += $netto;
-        $whMap[$wid]['mass_brutto_sum'] += $brutto;
-        $whMap[$wid]['volume_sum'] += $vol;
-        $whMap[$wid]['requests'][] = [
-            'zayavka_id'  => (int)$r['zayavka_id'],
-            'fkko_name'   => '',
-            'mass_netto'  => $netto,
-            'mass_brutto' => $brutto,
-            'volume'      => $vol,
-        ];
+    $flightSql = "SELECT
+            id AS flight_id,
+            status AS flight_status,
+            zayavki_ids AS current_zayavki_ids,
+            source_warehouse_id,
+            destination_warehouse_id,
+            actual_start_date,
+            actual_end_date
+        FROM flights
+        WHERE source_warehouse_id IS NOT NULL
+           OR destination_warehouse_id IS NOT NULL";
+    $flightMeta = [];
+    foreach ($pdo->query($flightSql)->fetchAll(PDO::FETCH_ASSOC) as $flightRow) {
+        $flightId = (int)$flightRow['flight_id'];
+        $flightMeta[$flightId] = $flightRow;
+        $flightMeta[$flightId]['current_requests'] = warehouseStockParseIds((string)$flightRow['current_zayavki_ids']);
     }
 
-    // ── Входящие рейсы (receipt + transfer_in) ──
-    $inSql = "SELECT wm.warehouse_id, wm.flight_id, wm.movement_type, MAX(wm.movement_date) AS movement_date,
-        COUNT(DISTINCT wm.zayavka_id) AS request_count,
-        SUM(COALESCE(wm.mass_netto,0)) AS mass_netto_sum,
-        SUM(COALESCE(wm.mass_brutto,0)) AS mass_brutto_sum,
-        SUM(COALESCE(wm.volume,0)) AS volume_sum
-    FROM warehouse_movements wm
-    WHERE wm.status = 'active' AND wm.movement_type IN ('receipt','transfer_in')
-    GROUP BY wm.warehouse_id, wm.flight_id, wm.movement_type
-    ORDER BY wm.warehouse_id, MAX(wm.movement_date) DESC";
-
-    $inRows = $pdo->query($inSql)->fetchAll(PDO::FETCH_ASSOC);
-    foreach ($inRows as $r) {
-        $wid = (int)$r['warehouse_id'];
-        if (!isset($whMap[$wid])) continue;
-        $whMap[$wid]['inbound_routes'][] = [
-            'flight_id'        => (int)$r['flight_id'],
-            'movement_type'    => $r['movement_type'],
-            'movement_label'   => moveLabel($r['movement_type']),
-            'movement_date'    => $r['movement_date'],
-            'request_count'    => (int)$r['request_count'],
-            'mass_netto_sum'   => round((float)$r['mass_netto_sum'], 4),
-            'mass_brutto_sum'  => round((float)$r['mass_brutto_sum'], 4),
-            'volume_sum'       => round((float)$r['volume_sum'], 4),
-        ];
+    $receiptDates = [];
+    $recordedReceipts = [];
+    $alreadyIssued = [];
+    foreach ($movementRows as $row) {
+        $warehouseId = (int)$row['warehouse_id'];
+        $flightId = (int)$row['flight_id'];
+        if (!isset($flightMeta[$flightId]) && !empty($row['current_flight_id'])) {
+            $flightMeta[$flightId] = $row;
+            $flightMeta[$flightId]['current_requests'] = warehouseStockParseIds((string)$row['current_zayavki_ids']);
+        }
+        $requestId = (int)$row['zayavka_id'];
+        if (in_array((string)$row['movement_type'], ['receipt', 'transfer_in'], true)) {
+            $receiptDates[$warehouseId][$flightId] = max(
+                $receiptDates[$warehouseId][$flightId] ?? '',
+                (string)$row['movement_date']
+            );
+            $recordedReceipts[$warehouseId][$flightId][$requestId] = true;
+        } else {
+            $alreadyIssued[$warehouseId][$flightId][$requestId] = true;
+        }
     }
 
-    // ── Исходящие рейсы (issue + transfer_out) ──
-    $outSql = "SELECT wm.warehouse_id, wm.flight_id, wm.movement_type, MAX(wm.movement_date) AS movement_date,
-        COUNT(DISTINCT wm.zayavka_id) AS request_count,
-        SUM(COALESCE(wm.mass_netto,0)) AS mass_netto_sum,
-        SUM(COALESCE(wm.mass_brutto,0)) AS mass_brutto_sum,
-        SUM(COALESCE(wm.volume,0)) AS volume_sum
-    FROM warehouse_movements wm
-    WHERE wm.status = 'active' AND wm.movement_type IN ('issue','transfer_out')
-    GROUP BY wm.warehouse_id, wm.flight_id, wm.movement_type
-    ORDER BY wm.warehouse_id, MAX(wm.movement_date) DESC";
+    $addedIds = [];
+    foreach ($receiptDates as $warehouseId => $warehouseFlights) {
+        foreach ($warehouseFlights as $flightId => $receiptDate) {
+            foreach (array_keys($flightMeta[$flightId]['current_requests'] ?? []) as $requestId) {
+                if (!isset($recordedReceipts[$warehouseId][$flightId][$requestId])) {
+                    $addedIds[$requestId] = $requestId;
+                }
+            }
+        }
+    }
+    $requestMasses = warehouseStockLoadRequestMasses($pdo, array_values($addedIds));
 
-    $outRows = $pdo->query($outSql)->fetchAll(PDO::FETCH_ASSOC);
-    foreach ($outRows as $r) {
-        $wid = (int)$r['warehouse_id'];
-        if (!isset($whMap[$wid])) continue;
-        $whMap[$wid]['outbound_routes'][] = [
-            'flight_id'        => (int)$r['flight_id'],
-            'movement_type'    => $r['movement_type'],
-            'movement_label'   => moveLabel($r['movement_type']),
-            'movement_date'    => $r['movement_date'],
-            'request_count'    => (int)$r['request_count'],
-            'mass_netto_sum'   => round((float)$r['mass_netto_sum'], 4),
-            'mass_brutto_sum'  => round((float)$r['mass_brutto_sum'], 4),
-            'volume_sum'       => round((float)$r['volume_sum'], 4),
+    foreach ($receiptDates as $warehouseId => $warehouseFlights) {
+        foreach ($warehouseFlights as $flightId => $receiptDate) {
+            foreach (array_keys($flightMeta[$flightId]['current_requests'] ?? []) as $requestId) {
+                if (isset($recordedReceipts[$warehouseId][$flightId][$requestId])) {
+                    continue;
+                }
+                $mass = $requestMasses[$requestId] ?? ['mass_netto' => 0.0, 'mass_brutto' => 0.0, 'volume' => 0.0];
+                $movementRows[] = array_merge($flightMeta[$flightId], $mass, [
+                    'id' => PHP_INT_MAX,
+                    'warehouse_id' => $warehouseId,
+                    'flight_id' => $flightId,
+                    'movement_type' => 'receipt',
+                    'zayavka_id' => $requestId,
+                    'movement_date' => $receiptDate,
+                    'current_flight_id' => $flightId,
+                    'derived_receipt' => true,
+                ]);
+            }
+        }
+    }
+
+    foreach ($flightMeta as $flightId => $meta) {
+        $warehouseId = (int)($meta['source_warehouse_id'] ?? 0);
+        if ($warehouseId <= 0
+            || !isset($whMap[$warehouseId])
+            || !in_array((string)($meta['flight_status'] ?? ''), ['started', 'in_progress', 'completed'], true)) {
+            continue;
+        }
+        $movementDate = (string)($meta['actual_start_date'] ?? '')
+            ?: (string)($meta['actual_end_date'] ?? '')
+            ?: date('Y-m-d H:i:s');
+        foreach (array_keys($meta['current_requests'] ?? []) as $requestId) {
+            if (isset($alreadyIssued[$warehouseId][$flightId][$requestId])) {
+                continue;
+            }
+            $movementRows[] = array_merge($meta, [
+                'id' => PHP_INT_MAX,
+                'warehouse_id' => $warehouseId,
+                'flight_id' => $flightId,
+                'movement_type' => 'issue',
+                'zayavka_id' => $requestId,
+                'mass_netto' => null,
+                'mass_brutto' => null,
+                'volume' => null,
+                'movement_date' => $movementDate,
+                'current_flight_id' => $flightId,
+                'derived_issue' => true,
+            ]);
+        }
+    }
+
+    usort($movementRows, static function (array $left, array $right): int {
+        $byDate = strcmp((string)$left['movement_date'], (string)$right['movement_date']);
+        return $byDate !== 0 ? $byDate : ((int)$left['id'] <=> (int)$right['id']);
+    });
+
+    $stockByWarehouse = [];
+    $routeEvents = [];
+    foreach ($movementRows as $row) {
+        $warehouseId = (int)$row['warehouse_id'];
+        if (!isset($whMap[$warehouseId])) {
+            continue;
+        }
+        $flightId = (int)$row['flight_id'];
+        $requestId = (int)$row['zayavka_id'];
+        $movementType = (string)$row['movement_type'];
+        $isInbound = in_array($movementType, ['receipt', 'transfer_in'], true);
+        $currentRequests = $flightMeta[$flightId]['current_requests'] ?? null;
+        $excluded = is_array($currentRequests) && !isset($currentRequests[$requestId]);
+
+        if (!isset($stockByWarehouse[$warehouseId][$requestId])) {
+            $stockByWarehouse[$warehouseId][$requestId] = [
+                'mass_netto' => 0.0,
+                'mass_brutto' => 0.0,
+                'volume' => 0.0,
+            ];
+        }
+        $before = $stockByWarehouse[$warehouseId][$requestId];
+        $isDerivedIssue = !empty($row['derived_issue']);
+        if ($isDerivedIssue && (float)$before['mass_netto'] <= 0.0001 && (float)$before['mass_brutto'] <= 0.0001) {
+            continue;
+        }
+
+        $massNetto = $isDerivedIssue ? max(0.0, (float)$before['mass_netto']) : abs((float)($row['mass_netto'] ?? 0));
+        $massBrutto = $isDerivedIssue ? max(0.0, (float)$before['mass_brutto']) : abs((float)($row['mass_brutto'] ?? 0));
+        $volume = $isDerivedIssue ? max(0.0, (float)$before['volume']) : abs((float)($row['volume'] ?? 0));
+        $direction = $isInbound ? 'in' : 'out';
+        $eventKey = $warehouseId . '|' . $flightId . '|' . $direction;
+        if (!isset($routeEvents[$eventKey])) {
+            $routeEvents[$eventKey] = [
+                'warehouse_id' => $warehouseId,
+                'flight_id' => $flightId,
+                'movement_type' => $movementType,
+                'movement_date' => (string)$row['movement_date'],
+                'request_ids' => [],
+                'mass_netto_sum' => 0.0,
+                'mass_brutto_sum' => 0.0,
+                'volume_sum' => 0.0,
+            ];
+        }
+        if ((string)$row['movement_date'] > (string)$routeEvents[$eventKey]['movement_date']) {
+            $routeEvents[$eventKey]['movement_date'] = (string)$row['movement_date'];
+        }
+        if ($excluded) {
+            continue;
+        }
+
+        $sign = $isInbound ? 1 : -1;
+        $stockByWarehouse[$warehouseId][$requestId]['mass_netto'] += $sign * $massNetto;
+        $stockByWarehouse[$warehouseId][$requestId]['mass_brutto'] += $sign * $massBrutto;
+        $stockByWarehouse[$warehouseId][$requestId]['volume'] += $sign * $volume;
+        $routeEvents[$eventKey]['request_ids'][$requestId] = true;
+        $routeEvents[$eventKey]['mass_netto_sum'] += $massNetto;
+        $routeEvents[$eventKey]['mass_brutto_sum'] += $massBrutto;
+        $routeEvents[$eventKey]['volume_sum'] += $volume;
+    }
+
+    foreach ($stockByWarehouse as $warehouseId => $requests) {
+        foreach ($requests as $requestId => $stock) {
+            $netto = round((float)$stock['mass_netto'], 4);
+            $brutto = round((float)$stock['mass_brutto'], 4);
+            $volume = round((float)$stock['volume'], 4);
+            if ($netto <= 0.0001 && $brutto <= 0.0001) {
+                continue;
+            }
+            $whMap[$warehouseId]['request_count']++;
+            $whMap[$warehouseId]['mass_netto_sum'] += $netto;
+            $whMap[$warehouseId]['mass_brutto_sum'] += $brutto;
+            $whMap[$warehouseId]['volume_sum'] += $volume;
+            $whMap[$warehouseId]['requests'][] = [
+                'zayavka_id' => (int)$requestId,
+                'fkko_name' => '',
+                'mass_netto' => $netto,
+                'mass_brutto' => $brutto,
+                'volume' => $volume,
+            ];
+        }
+    }
+
+    foreach ($routeEvents as $event) {
+        $warehouseId = (int)$event['warehouse_id'];
+        $route = [
+            'flight_id' => (int)$event['flight_id'],
+            'movement_type' => $event['movement_type'],
+            'movement_label' => moveLabel($event['movement_type']),
+            'movement_date' => $event['movement_date'],
+            'request_count' => count($event['request_ids']),
+            'mass_netto_sum' => round((float)$event['mass_netto_sum'], 4),
+            'mass_brutto_sum' => round((float)$event['mass_brutto_sum'], 4),
+            'volume_sum' => round((float)$event['volume_sum'], 4),
         ];
+        if (in_array((string)$event['movement_type'], ['receipt', 'transfer_in'], true)) {
+            $whMap[$warehouseId]['inbound_routes'][] = $route;
+        } else {
+            $whMap[$warehouseId]['outbound_routes'][] = $route;
+        }
     }
 
     // Сортируем inbound/outbound по дате (новые первыми)
