@@ -11,7 +11,7 @@ class FlightRepository
     public function fetchStatusesForActual()
     {
         try {
-            $stmt = $this->pdo->query("SELECT id, zayavki_ids, status FROM flights ORDER BY block_date DESC");
+            $stmt = $this->pdo->query("SELECT id, zayavki_ids, status, source_warehouse_id FROM flights ORDER BY block_date DESC");
             if (!$stmt) {
                 mapError('FlightRepository query returned false');
                 return [];

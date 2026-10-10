@@ -67,6 +67,13 @@ class MapDataService
                 continue;
             }
 
+            // Заявка, которую забирают со склада, физически уже не находится
+            // на исходном адресе ОО. Складской маркер показывает её остаток,
+            // поэтому отдельный FEO-маркер по старым координатам не создаём.
+            if ($inFlight && (int)($flightStatuses[$point['zayavka_id']]['source_warehouse_id'] ?? 0) > 0) {
+                continue;
+            }
+
             $point['flight_status'] = $inFlight ? $flightStatuses[$point['zayavka_id']]['status'] : null;
             $point['flight_id'] = $inFlight ? $flightStatuses[$point['zayavka_id']]['flight_id'] : null;
 
@@ -324,6 +331,7 @@ class MapDataService
                         'status' => $status,
                         'color' => $this->statusColors[$status] ?? '#000',
                         'flight_id' => $flightId,
+                        'source_warehouse_id' => (int)($row['source_warehouse_id'] ?? 0),
                     ];
                     $processed[$id] = true;
                 }
