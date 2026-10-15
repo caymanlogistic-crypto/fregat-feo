@@ -27,6 +27,25 @@ function warehouseStockParseIds(string $value): array
     return $ids;
 }
 
+function warehouseStockWarehouseRequestIds(array $flight): array
+{
+    $requestIds = warehouseStockParseIds((string)($flight['current_zayavki_ids'] ?? ''));
+    if ((string)($flight['route_type'] ?? '') !== 'mixed_to_utilizer') {
+        return $requestIds;
+    }
+
+    foreach (array_keys(warehouseStockParseIds((string)($flight['current_direct_zayavki_ids'] ?? ''))) as $requestId) {
+        unset($requestIds[$requestId]);
+    }
+    return $requestIds;
+}
+
+function warehouseStockSequenceAt(array $movement): string
+{
+    $createdAt = trim((string)($movement['created_at'] ?? ''));
+    return $createdAt !== '' ? $createdAt : (string)($movement['movement_date'] ?? '');
+}
+
 function warehouseStockLoadRequestMasses(PDO $pdo, array $ids): array
 {
     if (empty($ids)) {
@@ -121,9 +140,12 @@ try {
             wm.mass_brutto,
             wm.volume,
             wm.movement_date,
+            wm.created_at,
             f.id AS current_flight_id,
             COALESCE(f.status, '') AS flight_status,
+            COALESCE(f.route_type, '') AS route_type,
             COALESCE(f.zayavki_ids, '') AS current_zayavki_ids,
+            COALESCE(f.direct_zayavki_ids, '') AS current_direct_zayavki_ids,
             f.source_warehouse_id,
             f.destination_warehouse_id,
             f.actual_start_date,
@@ -138,7 +160,9 @@ try {
     $flightSql = "SELECT
             id AS flight_id,
             status AS flight_status,
+            route_type,
             zayavki_ids AS current_zayavki_ids,
+            COALESCE(direct_zayavki_ids, '') AS current_direct_zayavki_ids,
             source_warehouse_id,
             destination_warehouse_id,
             actual_start_date,
@@ -150,7 +174,7 @@ try {
     foreach ($pdo->query($flightSql)->fetchAll(PDO::FETCH_ASSOC) as $flightRow) {
         $flightId = (int)$flightRow['flight_id'];
         $flightMeta[$flightId] = $flightRow;
-        $flightMeta[$flightId]['current_requests'] = warehouseStockParseIds((string)$flightRow['current_zayavki_ids']);
+        $flightMeta[$flightId]['current_requests'] = warehouseStockWarehouseRequestIds($flightRow);
     }
 
     $receiptDates = [];
@@ -161,7 +185,7 @@ try {
         $flightId = (int)$row['flight_id'];
         if (!isset($flightMeta[$flightId]) && !empty($row['current_flight_id'])) {
             $flightMeta[$flightId] = $row;
-            $flightMeta[$flightId]['current_requests'] = warehouseStockParseIds((string)$row['current_zayavki_ids']);
+            $flightMeta[$flightId]['current_requests'] = warehouseStockWarehouseRequestIds($row);
         }
         $requestId = (int)$row['zayavka_id'];
         if (in_array((string)$row['movement_type'], ['receipt', 'transfer_in'], true)) {
@@ -239,8 +263,8 @@ try {
     }
 
     usort($movementRows, static function (array $left, array $right): int {
-        $byDate = strcmp((string)$left['movement_date'], (string)$right['movement_date']);
-        return $byDate !== 0 ? $byDate : ((int)$left['id'] <=> (int)$right['id']);
+        $bySequence = strcmp(warehouseStockSequenceAt($left), warehouseStockSequenceAt($right));
+        return $bySequence !== 0 ? $bySequence : ((int)$left['id'] <=> (int)$right['id']);
     });
 
     $stockByWarehouse = [];
@@ -281,6 +305,7 @@ try {
                 'flight_id' => $flightId,
                 'movement_type' => $movementType,
                 'movement_date' => (string)$row['movement_date'],
+                'sequence_at' => warehouseStockSequenceAt($row),
                 'request_ids' => [],
                 'mass_netto_sum' => 0.0,
                 'mass_brutto_sum' => 0.0,
@@ -289,6 +314,9 @@ try {
         }
         if ((string)$row['movement_date'] > (string)$routeEvents[$eventKey]['movement_date']) {
             $routeEvents[$eventKey]['movement_date'] = (string)$row['movement_date'];
+        }
+        if (warehouseStockSequenceAt($row) > (string)$routeEvents[$eventKey]['sequence_at']) {
+            $routeEvents[$eventKey]['sequence_at'] = warehouseStockSequenceAt($row);
         }
         if ($excluded) {
             continue;
@@ -333,6 +361,7 @@ try {
             'movement_type' => $event['movement_type'],
             'movement_label' => moveLabel($event['movement_type']),
             'movement_date' => $event['movement_date'],
+            'sequence_at' => $event['sequence_at'],
             'request_count' => count($event['request_ids']),
             'mass_netto_sum' => round((float)$event['mass_netto_sum'], 4),
             'mass_brutto_sum' => round((float)$event['mass_brutto_sum'], 4),
@@ -345,10 +374,10 @@ try {
         }
     }
 
-    // Сортируем inbound/outbound по дате (новые первыми)
+    // Сортируем inbound/outbound по фактической последовательности проводок (новые первыми).
     foreach ($whMap as &$wh) {
-        usort($wh['inbound_routes'], function($a, $b) { return strcmp($b['movement_date'] ?? '', $a['movement_date'] ?? ''); });
-        usort($wh['outbound_routes'], function($a, $b) { return strcmp($b['movement_date'] ?? '', $a['movement_date'] ?? ''); });
+        usort($wh['inbound_routes'], function($a, $b) { return strcmp($b['sequence_at'] ?? '', $a['sequence_at'] ?? ''); });
+        usort($wh['outbound_routes'], function($a, $b) { return strcmp($b['sequence_at'] ?? '', $a['sequence_at'] ?? ''); });
     }
     unset($wh);
 

@@ -133,6 +133,25 @@ function whLedgerParseIds(string $value): array
     return $ids;
 }
 
+function whLedgerWarehouseRequestIds(array $flight): array
+{
+    $requestIds = whLedgerParseIds((string)($flight['current_zayavki_ids'] ?? ''));
+    if ((string)($flight['route_type'] ?? '') !== 'mixed_to_utilizer') {
+        return $requestIds;
+    }
+
+    foreach (array_keys(whLedgerParseIds((string)($flight['current_direct_zayavki_ids'] ?? ''))) as $requestId) {
+        unset($requestIds[$requestId]);
+    }
+    return $requestIds;
+}
+
+function whLedgerSequenceAt(array $movement): string
+{
+    $createdAt = trim((string)($movement['created_at'] ?? ''));
+    return $createdAt !== '' ? $createdAt : (string)($movement['movement_date'] ?? '');
+}
+
 function whLedgerLoadRequestMasses(PDO $pdo, array $ids): array
 {
     if (empty($ids)) {
@@ -205,11 +224,13 @@ if ($warehouseId > 0 && $pageError === '') {
                     wm.mass_brutto,
                     wm.volume,
                     wm.movement_date,
+                    wm.created_at,
                     f.id AS current_flight_id,
                     COALESCE(f.comment, '') AS flight_name,
                     COALESCE(f.status, '') AS flight_status,
                     COALESCE(f.route_type, '') AS route_type,
                     COALESCE(f.zayavki_ids, '') AS current_zayavki_ids,
+                    COALESCE(f.direct_zayavki_ids, '') AS current_direct_zayavki_ids,
                     f.source_warehouse_id,
                     f.destination_warehouse_id,
                     f.actual_start_date,
@@ -233,6 +254,7 @@ if ($warehouseId > 0 && $pageError === '') {
                         f.status AS flight_status,
                         f.route_type,
                         f.zayavki_ids AS current_zayavki_ids,
+                        COALESCE(f.direct_zayavki_ids, '') AS current_direct_zayavki_ids,
                         f.source_warehouse_id,
                         f.destination_warehouse_id,
                         f.actual_start_date,
@@ -250,7 +272,7 @@ if ($warehouseId > 0 && $pageError === '') {
         foreach ($flightStmt->fetchAll(PDO::FETCH_ASSOC) as $flightRow) {
             $flightId = (int)$flightRow['flight_id'];
             $flightMeta[$flightId] = $flightRow;
-            $flightMeta[$flightId]['current_requests'] = whLedgerParseIds((string)$flightRow['current_zayavki_ids']);
+            $flightMeta[$flightId]['current_requests'] = whLedgerWarehouseRequestIds($flightRow);
         }
 
         $receiptDates = [];
@@ -260,7 +282,7 @@ if ($warehouseId > 0 && $pageError === '') {
             $flightId = (int)$row['flight_id'];
             if (!isset($flightMeta[$flightId]) && !empty($row['current_flight_id'])) {
                 $flightMeta[$flightId] = $row;
-                $flightMeta[$flightId]['current_requests'] = whLedgerParseIds((string)$row['current_zayavki_ids']);
+                $flightMeta[$flightId]['current_requests'] = whLedgerWarehouseRequestIds($row);
             }
             $requestId = (int)$row['zayavka_id'];
             $type = (string)$row['movement_type'];
@@ -328,8 +350,8 @@ if ($warehouseId > 0 && $pageError === '') {
         }
 
         usort($movementRows, static function (array $left, array $right): int {
-            $byDate = strcmp((string)$left['movement_date'], (string)$right['movement_date']);
-            return $byDate !== 0 ? $byDate : ((int)$left['id'] <=> (int)$right['id']);
+            $bySequence = strcmp(whLedgerSequenceAt($left), whLedgerSequenceAt($right));
+            return $bySequence !== 0 ? $bySequence : ((int)$left['id'] <=> (int)$right['id']);
         });
 
         $eventsByKey = [];
@@ -366,6 +388,7 @@ if ($warehouseId > 0 && $pageError === '') {
                     'vehicle' => whLedgerPlate((string)($meta['vehicle_make_plate'] ?? '')),
                     'movement_type' => $movementType,
                     'movement_date' => (string)$movementRow['movement_date'],
+                    'sequence_at' => whLedgerSequenceAt($movementRow),
                     'journal_zayavka_ids' => [],
                     'added_zayavka_ids' => [],
                     'removed_zayavka_ids' => [],
@@ -379,6 +402,9 @@ if ($warehouseId > 0 && $pageError === '') {
             $event =& $eventsByKey[$eventKey];
             if ((string)$movementRow['movement_date'] > (string)$event['movement_date']) {
                 $event['movement_date'] = (string)$movementRow['movement_date'];
+            }
+            if (whLedgerSequenceAt($movementRow) > (string)$event['sequence_at']) {
+                $event['sequence_at'] = whLedgerSequenceAt($movementRow);
             }
             $isAdded = !empty($movementRow['derived_receipt']) || $isDerivedIssue;
             if ($isAdded) {
@@ -411,8 +437,8 @@ if ($warehouseId > 0 && $pageError === '') {
             $events[] = $event;
         }
         usort($events, static function (array $left, array $right): int {
-            $byDate = strcmp((string)$left['movement_date'], (string)$right['movement_date']);
-            return $byDate !== 0 ? $byDate : ((int)$left['flight_id'] <=> (int)$right['flight_id']);
+            $bySequence = strcmp((string)$left['sequence_at'], (string)$right['sequence_at']);
+            return $bySequence !== 0 ? $bySequence : ((int)$left['flight_id'] <=> (int)$right['flight_id']);
         });
     } catch (Throwable $e) {
         $pageError = 'Не удалось загрузить движения склада.';
@@ -525,7 +551,7 @@ $displayEvents = array_slice($displayEvents, 0, $limit);
             <div class="request-list">Заявки на складе: <?= whLedgerHtml(implode(', ', $currentStock['request_ids'])) ?></div>
         <?php endif; ?>
         <div class="legend">
-            <span>Остаток пересчитывается по журналу движений и текущему составу рейса.</span>
+            <span>Остаток пересчитывается по фактической последовательности проводок и текущему складскому составу рейса.</span>
             <span><span class="legend-removed">Зачёркнуто</span> — удалено из рейса и не влияет на остаток.</span>
             <span><span class="legend-added">+ зелёным</span> — добавлено в рейс и учтено в расчёте.</span>
         </div>
