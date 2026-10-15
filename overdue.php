@@ -21,6 +21,27 @@ function overdueTableExists(PDO $pdo): bool
     return $stmt && (bool)$stmt->fetchColumn();
 }
 
+function overdueCollectDateColumnExists(PDO $pdo): bool
+{
+    $stmt = $pdo->query("SHOW COLUMNS FROM overdue_blocks LIKE 'collect_by_date'");
+    return $stmt && (bool)$stmt->fetchColumn();
+}
+
+function overdueValidateCollectDate(string $value): string
+{
+    $value = trim($value);
+    $date = DateTimeImmutable::createFromFormat('!Y-m-d', $value);
+    $errors = DateTimeImmutable::getLastErrors();
+    if (
+        !$date
+        || ($errors !== false && ((int)$errors['warning_count'] > 0 || (int)$errors['error_count'] > 0))
+        || $date->format('Y-m-d') !== $value
+    ) {
+        throw new RuntimeException('Укажите корректную дату «Собрать до».');
+    }
+    return $value;
+}
+
 function overdueParseIds(string $raw): array
 {
     $result = [];
@@ -78,12 +99,16 @@ function overdueAssertUnique(PDO $pdo, array $ids, int $excludeBlockId = 0): voi
 }
 
 $tableExists = overdueTableExists($pdo);
+$collectDateColumnExists = $tableExists && overdueCollectDateColumnExists($pdo);
 $error = '';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     try {
         if (!$tableExists) {
             throw new RuntimeException('Таблица overdue_blocks ещё не создана.');
+        }
+        if (!$collectDateColumnExists) {
+            throw new RuntimeException('Поле «Собрать до» ещё не добавлено. Выполните проектную миграцию.');
         }
         if (!hash_equals((string)$_SESSION['overdue_form_token'], (string)($_POST['form_token'] ?? ''))) {
             throw new RuntimeException('Ошибка безопасности. Обновите страницу.');
@@ -101,6 +126,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         $name = trim((string)($_POST['name'] ?? ''));
+        $collectByDate = overdueValidateCollectDate((string)($_POST['collect_by_date'] ?? ''));
         $ids = overdueParseIds((string)($_POST['zayavki_ids'] ?? ''));
         if ($name === '') {
             throw new RuntimeException('Введите название блока.');
@@ -114,15 +140,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             overdueAssertUnique($pdo, $ids, $blockId);
             $stmt = $pdo->prepare(
-                'UPDATE overdue_blocks SET name = ?, zayavki_count = ?, total_mass_tonn = ?, zayavki_ids = ? WHERE id = ?'
+                'UPDATE overdue_blocks SET name = ?, collect_by_date = ?, zayavki_count = ?, total_mass_tonn = ?, zayavki_ids = ? WHERE id = ?'
             );
-            $stmt->execute([$name, $summary['count'], $summary['total_mass_tonn'], implode(',', $ids), $blockId]);
+            $stmt->execute([$name, $collectByDate, $summary['count'], $summary['total_mass_tonn'], implode(',', $ids), $blockId]);
         } else {
             overdueAssertUnique($pdo, $ids);
             $stmt = $pdo->prepare(
-                'INSERT INTO overdue_blocks (name, zayavki_count, total_mass_tonn, zayavki_ids) VALUES (?, ?, ?, ?)'
+                'INSERT INTO overdue_blocks (name, collect_by_date, zayavki_count, total_mass_tonn, zayavki_ids) VALUES (?, ?, ?, ?, ?)'
             );
-            $stmt->execute([$name, $summary['count'], $summary['total_mass_tonn'], implode(',', $ids)]);
+            $stmt->execute([$name, $collectByDate, $summary['count'], $summary['total_mass_tonn'], implode(',', $ids)]);
         }
 
         $_SESSION['overdue_form_token'] = bin2hex(random_bytes(32));
@@ -142,8 +168,9 @@ if ($tableExists && isset($_GET['edit']) && ctype_digit((string)$_GET['edit'])) 
 
 $blocks = [];
 if ($tableExists) {
+    $collectDateSelect = $collectDateColumnExists ? 'collect_by_date' : 'NULL AS collect_by_date';
     $blocks = $pdo->query(
-        'SELECT id, name, zayavki_count, total_mass_tonn, zayavki_ids, created_at FROM overdue_blocks ORDER BY id ASC'
+        "SELECT id, name, {$collectDateSelect}, zayavki_count, total_mass_tonn, zayavki_ids, created_at FROM overdue_blocks ORDER BY id ASC"
     )->fetchAll(PDO::FETCH_ASSOC);
 }
 
@@ -164,7 +191,7 @@ function overdueH(string $value): string
         .overdue-page { max-width: 1240px; margin: 28px auto; padding: 0 20px 40px; }
         .overdue-card { background: #fff; border: 1px solid #dfe3e8; border-radius: 10px; padding: 20px; margin-bottom: 18px; box-shadow: 0 2px 8px rgba(0,0,0,.04); }
         .overdue-card h1, .overdue-card h2 { margin-top: 0; }
-        .overdue-grid { display: grid; grid-template-columns: minmax(220px, .7fr) minmax(360px, 1.3fr); gap: 16px; }
+        .overdue-grid { display: grid; grid-template-columns: minmax(220px, .65fr) minmax(180px, .45fr) minmax(360px, 1.3fr); gap: 16px; }
         .overdue-field label { display: block; margin-bottom: 6px; font-weight: 700; }
         .overdue-field input, .overdue-field textarea { box-sizing: border-box; width: 100%; padding: 10px; border: 1px solid #b9c1cc; border-radius: 6px; font: inherit; }
         .overdue-field textarea { min-height: 108px; resize: vertical; }
@@ -191,6 +218,8 @@ function overdueH(string $value): string
 
         <?php if (!$tableExists): ?>
             <div class="overdue-alert error">Таблица <code>overdue_blocks</code> не создана. Сначала выполните проектную миграцию.</div>
+        <?php elseif (!$collectDateColumnExists): ?>
+            <div class="overdue-alert error">Поле «Собрать до» ещё не добавлено. Выполните проектную миграцию.</div>
         <?php endif; ?>
         <?php if ($error !== ''): ?>
             <div class="overdue-alert error"><?= overdueH($error) ?></div>
@@ -200,7 +229,7 @@ function overdueH(string $value): string
             <div class="overdue-alert success">Блок удалён.</div>
         <?php endif; ?>
 
-        <?php if ($tableExists): ?>
+        <?php if ($tableExists && $collectDateColumnExists): ?>
         <form method="post">
             <input type="hidden" name="form_token" value="<?= overdueH((string)$_SESSION['overdue_form_token']) ?>">
             <?php if ($editBlock): ?>
@@ -213,6 +242,11 @@ function overdueH(string $value): string
                 <div class="overdue-field">
                     <label for="name">Название</label>
                     <input id="name" name="name" maxlength="255" required value="<?= overdueH((string)($editBlock['name'] ?? '')) ?>">
+                </div>
+                <div class="overdue-field">
+                    <label for="collect_by_date">Собрать до</label>
+                    <input id="collect_by_date" name="collect_by_date" type="date" required value="<?= overdueH((string)($editBlock['collect_by_date'] ?? '')) ?>">
+                    <div class="overdue-note">Плановая дата завершения сбора заявок блока.</div>
                 </div>
                 <div class="overdue-field">
                     <label for="zayavki_ids">Источник — заявки</label>
@@ -232,15 +266,16 @@ function overdueH(string $value): string
         <h2>Блоки просрочки</h2>
         <div class="overdue-table-wrap">
             <table class="overdue-table">
-                <thead><tr><th>ID</th><th>Название</th><th>Заявки</th><th>Общая масса</th><th>Источник</th><th>Дата добавления</th><th>Действия</th></tr></thead>
+                <thead><tr><th>ID</th><th>Название</th><th>Собрать до</th><th>Заявки</th><th>Общая масса</th><th>Источник</th><th>Дата добавления</th><th>Действия</th></tr></thead>
                 <tbody>
                 <?php if (!$blocks): ?>
-                    <tr><td colspan="7">Блоков пока нет.</td></tr>
+                    <tr><td colspan="8">Блоков пока нет.</td></tr>
                 <?php else: ?>
                     <?php foreach ($blocks as $block): ?>
                     <tr>
                         <td><?= (int)$block['id'] ?></td>
                         <td><strong><?= overdueH((string)$block['name']) ?></strong></td>
+                        <td><?= $block['collect_by_date'] ? overdueH(date('d.m.Y', strtotime((string)$block['collect_by_date']))) : 'Не задано' ?></td>
                         <td><?= (int)$block['zayavki_count'] ?></td>
                         <td><?= number_format((float)$block['total_mass_tonn'] * 1000, 0, '.', ' ') ?> кг</td>
                         <td class="overdue-source"><?= overdueH(implode(', ', overdueParseIds((string)$block['zayavki_ids']))) ?></td>

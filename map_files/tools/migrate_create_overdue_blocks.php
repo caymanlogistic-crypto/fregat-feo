@@ -20,6 +20,7 @@ $pdo->exec(<<<'SQL'
 CREATE TABLE IF NOT EXISTS overdue_blocks (
     id INT(11) NOT NULL AUTO_INCREMENT,
     name VARCHAR(255) NOT NULL,
+    collect_by_date DATE NULL COMMENT 'Дата, до которой нужно собрать заявки блока',
     zayavki_count INT(11) NOT NULL DEFAULT 0,
     total_mass_tonn DECIMAL(10,3) NOT NULL DEFAULT 0.000,
     zayavki_ids TEXT NOT NULL COMMENT 'ID заявок через запятую',
