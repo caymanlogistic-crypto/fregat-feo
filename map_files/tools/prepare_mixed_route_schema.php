@@ -23,14 +23,24 @@ if (array_values(array_diff($arguments, ['--apply']))) {
 
 $columnStmt = $pdo->query("SHOW COLUMNS FROM flights LIKE 'direct_zayavki_ids'");
 $columnBefore = $columnStmt ? ($columnStmt->fetch(PDO::FETCH_ASSOC) ?: null) : null;
-if (is_array($columnBefore)) {
-    echo "PASS: flights.direct_zayavki_ids already exists. No changes required.\n";
+$routeTypeStmt = $pdo->query("SHOW COLUMNS FROM flights LIKE 'route_type'");
+$routeTypeBefore = $routeTypeStmt ? ($routeTypeStmt->fetch(PDO::FETCH_ASSOC) ?: null) : null;
+if (!is_array($routeTypeBefore)) {
+    fwrite(STDERR, "flights.route_type is missing. No changes made.\n");
+    exit(1);
+}
+
+$needsDirectColumn = !is_array($columnBefore);
+$needsMixedEnum = !str_contains(strtolower((string)($routeTypeBefore['Type'] ?? '')), "'mixed_to_utilizer'");
+if (!$needsDirectColumn && !$needsMixedEnum) {
+    echo "PASS: mixed route schema is already prepared. No changes required.\n";
     exit(0);
 }
 
-echo "Checked: flights.direct_zayavki_ids is absent.\n";
+echo 'Checked: direct_zayavki_ids = ' . ($needsDirectColumn ? 'missing' : 'ready') . PHP_EOL;
+echo 'Checked: route_type mixed_to_utilizer = ' . ($needsMixedEnum ? 'missing' : 'ready') . PHP_EOL;
 if (!$apply) {
-    echo "DRY RUN complete. No data changed. Run again with --apply to add the nullable column.\n";
+    echo "DRY RUN complete. No data changed. Run again with --apply to prepare the schema.\n";
     exit(0);
 }
 
@@ -63,7 +73,8 @@ $payload = [
     'purpose' => 'Before adding flights.direct_zayavki_ids',
     'database' => (string)$pdo->query('SELECT DATABASE()')->fetchColumn(),
     'flights_schema' => $schemaRow,
-    'direct_zayavki_column_before' => null,
+    'direct_zayavki_column_before' => $columnBefore,
+    'route_type_column_before' => $routeTypeBefore,
 ];
 $json = json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 if (!is_string($json)) {
@@ -95,12 +106,32 @@ if (!is_string($backupHash)
 echo "Backup: {$backupPath}\n";
 echo "SHA256: {$backupHash}\n";
 
-$pdo->exec("ALTER TABLE flights ADD COLUMN direct_zayavki_ids TEXT NULL DEFAULT NULL AFTER zayavki_ids");
+$changes = [];
+if ($needsDirectColumn) {
+    $pdo->exec("ALTER TABLE flights ADD COLUMN direct_zayavki_ids TEXT NULL DEFAULT NULL AFTER zayavki_ids");
+    $changes[] = 'added flights.direct_zayavki_ids';
+}
+if ($needsMixedEnum) {
+    $pdo->exec(
+        "ALTER TABLE flights MODIFY COLUMN route_type
+         ENUM('generator_to_utilizer','generator_to_warehouse','warehouse_to_warehouse','warehouse_to_utilizer','mixed_to_utilizer')
+         COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'generator_to_utilizer'"
+    );
+    $changes[] = 'added mixed_to_utilizer to flights.route_type';
+}
+
 $verifyStmt = $pdo->query("SHOW COLUMNS FROM flights LIKE 'direct_zayavki_ids'");
 $columnAfter = $verifyStmt ? ($verifyStmt->fetch(PDO::FETCH_ASSOC) ?: null) : null;
-if (!is_array($columnAfter) || strtolower((string)($columnAfter['Type'] ?? '')) !== 'text') {
-    fwrite(STDERR, "FAIL: column verification failed. Backup: {$backupPath}\n");
+$routeTypeVerifyStmt = $pdo->query("SHOW COLUMNS FROM flights LIKE 'route_type'");
+$routeTypeAfter = $routeTypeVerifyStmt ? ($routeTypeVerifyStmt->fetch(PDO::FETCH_ASSOC) ?: null) : null;
+if (!is_array($columnAfter)
+    || strtolower((string)($columnAfter['Type'] ?? '')) !== 'text'
+    || !is_array($routeTypeAfter)
+    || !str_contains(strtolower((string)($routeTypeAfter['Type'] ?? '')), "'mixed_to_utilizer'")) {
+    fwrite(STDERR, "FAIL: schema verification failed. Backup: {$backupPath}\n");
     exit(1);
 }
 
-echo 'PASS: ' . json_encode($columnAfter, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . PHP_EOL;
+echo 'Applied: ' . implode('; ', $changes) . PHP_EOL;
+echo 'PASS direct_zayavki_ids: ' . json_encode($columnAfter, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . PHP_EOL;
+echo 'PASS route_type: ' . json_encode($routeTypeAfter, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . PHP_EOL;
