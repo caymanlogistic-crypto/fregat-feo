@@ -97,6 +97,7 @@ $routeType = strtolower(safeStr($flight['route_type'] ?? ''));
 $status = safeStr($flight['status'] ?? '');
 $sourceWid = (int)($flight['source_warehouse_id'] ?? 0);
 $destWid = (int)($flight['destination_warehouse_id'] ?? 0);
+$readinessMissingIds = [];
 
 // ──────────────────────────────────────────────────────
 // SECTION 2 — WAREHOUSES
@@ -160,6 +161,77 @@ if (empty($zayavkiIds)) {
     foreach ($zayavkiIds as $zid) {
         if (!isset($foundIds[$zid])) {
             p("  FAIL: zayavka_id={$zid} не найден в feo.");
+        }
+    }
+}
+
+// ──────────────────────────────────────────────────────
+// SECTION 3B — SOURCE WAREHOUSE READINESS
+// ──────────────────────────────────────────────────────
+if (!in_array($status, ['started', 'completed'], true)
+    && in_array($routeType, ['warehouse_to_warehouse', 'warehouse_to_utilizer', 'mixed_to_utilizer'], true)
+    && $sourceWid > 0
+) {
+    hr();
+    p('SECTION 3B — SOURCE WAREHOUSE READINESS');
+    hr();
+    $readinessIds = $routeType === 'mixed_to_utilizer' ? $warehouseZayavkiIds : $zayavkiIds;
+    $availableIds = [];
+    if ($readinessIds) {
+        $readinessPlaceholders = implode(',', array_fill(0, count($readinessIds), '?'));
+        $availabilityRows = fetchAll(
+            $pdo,
+            "SELECT zayavka_id,
+                    SUM(CASE WHEN movement_type IN ('receipt','transfer_in') THEN COALESCE(mass_netto,0)
+                             WHEN movement_type IN ('issue','transfer_out') THEN -COALESCE(mass_netto,0)
+                             ELSE 0 END) AS available_netto
+             FROM warehouse_movements
+             WHERE status = 'active' AND warehouse_id = ?
+               AND zayavka_id IN ({$readinessPlaceholders})
+             GROUP BY zayavka_id
+             HAVING available_netto > 0.0001",
+            array_merge([$sourceWid], $readinessIds)
+        );
+        foreach ($availabilityRows as $availabilityRow) {
+            $availableIds[(int)$availabilityRow['zayavka_id']] = true;
+        }
+    }
+    $readinessMissingIds = array_values(array_filter(
+        $readinessIds,
+        static fn(int $id): bool => !isset($availableIds[$id])
+    ));
+    p('  Нужны со склада: ' . count($readinessIds) . '.');
+    p('  Уже доступны: ' . count($availableIds) . '.');
+    p('  Отсутствуют: ' . ($readinessMissingIds ? implode(', ', $readinessMissingIds) : 'нет') . '.');
+
+    if ($readinessMissingIds) {
+        $incomingRows = fetchAll(
+            $pdo,
+            "SELECT id, status, route_type, unload_type, zayavki_ids, actual_end_date
+             FROM flights
+             WHERE destination_warehouse_id = ?
+               AND (route_type IN ('generator_to_warehouse','warehouse_to_warehouse')
+                    OR (unload_type = 'SKLAD' AND (route_type IS NULL OR route_type = '')))
+             ORDER BY id DESC",
+            [$sourceWid]
+        );
+        $missingMap = array_fill_keys($readinessMissingIds, true);
+        foreach ($incomingRows as $incomingRow) {
+            $matched = [];
+            foreach (explode(',', (string)($incomingRow['zayavki_ids'] ?? '')) as $incomingIdRaw) {
+                $incomingId = (int)trim($incomingIdRaw);
+                if ($incomingId > 0 && isset($missingMap[$incomingId])) {
+                    $matched[$incomingId] = $incomingId;
+                }
+            }
+            if ($matched) {
+                p(
+                    '  Ожидаются через рейс #' . (int)$incomingRow['id']
+                    . ' [' . safeStr($incomingRow['status'] ?? '') . ']'
+                    . ': ' . implode(', ', array_values($matched))
+                    . '; завершён: ' . (safeStr($incomingRow['actual_end_date'] ?? '') ?: 'нет') . '.'
+                );
+            }
         }
     }
 }
@@ -302,6 +374,12 @@ if ($status !== 'completed') {
     if ($routeType === 'generator_to_warehouse' && $destWid <= 0) {
         $verdict = 'FAIL';
         $messages[] = 'BEFORE COMPLETION: destination_warehouse_id не заполнен.';
+    }
+    if ($readinessMissingIds) {
+        $verdict = 'FAIL';
+        $messages[] = 'START BLOCKED: на складе отсутствуют заявки ' . implode(', ', $readinessMissingIds) . '.';
+    } elseif (in_array($routeType, ['warehouse_to_warehouse', 'warehouse_to_utilizer', 'mixed_to_utilizer'], true)) {
+        $messages[] = 'START READY: все складские заявки доступны.';
     }
 }
 
