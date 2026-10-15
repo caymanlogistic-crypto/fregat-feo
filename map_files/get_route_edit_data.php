@@ -27,6 +27,11 @@ try {
     $retentionJoin = $retentionReady
         ? 'LEFT JOIN planned_route_retention prr ON prr.flight_id = f.id'
         : '';
+    $directRequestsSelect = "'' AS direct_zayavki_ids";
+    $directColumnStmt = $pdo->query("SHOW COLUMNS FROM flights LIKE 'direct_zayavki_ids'");
+    if ($directColumnStmt && $directColumnStmt->fetch(PDO::FETCH_ASSOC)) {
+        $directRequestsSelect = 'f.direct_zayavki_ids';
+    }
     $sql = "
         SELECT
             f.id,
@@ -40,6 +45,7 @@ try {
             f.actual_end_date,
             f.cost,
             f.zayavki_ids,
+            {$directRequestsSelect},
             f.route_type,
             f.legal_entity_code,
             f.unload_type,

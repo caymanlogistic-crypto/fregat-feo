@@ -145,7 +145,7 @@ function loadFlightSnapshot(PDO $pdo, $flightId): ?array
 {
     try {
         $managerColumn = resolveFlightsManagerColumn($pdo) ?? 'assigned_manager_id';
-        $sql = 'SELECT id, status, driver_id, zayavki_ids, planned_start_date_from, planned_start_date_to, actual_start_date, actual_end_date, comment, cost, unload_type, route_type, legal_entity_code, source_warehouse_id, destination_warehouse_id, '
+        $sql = 'SELECT id, status, driver_id, zayavki_ids, direct_zayavki_ids, planned_start_date_from, planned_start_date_to, actual_start_date, actual_end_date, comment, cost, unload_type, route_type, legal_entity_code, source_warehouse_id, destination_warehouse_id, '
             . quoteIdent($managerColumn) . ' AS assigned_manager_id FROM flights WHERE id = ? LIMIT 1';
         $stmt = $pdo->prepare($sql);
         if (!$stmt || !$stmt->execute([(int)$flightId])) {
@@ -158,6 +158,8 @@ function loadFlightSnapshot(PDO $pdo, $flightId): ?array
         $ids = normalizeIdsString($row['zayavki_ids'] ?? '');
         $metrics = getRouteMetrics($pdo, $ids);
         $row['_ids'] = $ids;
+        $row['_direct_ids'] = normalizeIdsString($row['direct_zayavki_ids'] ?? '');
+        $row['_warehouse_ids'] = array_values(array_diff($ids, $row['_direct_ids']));
         $row['_count'] = $metrics['count'];
         $row['_sum_tons'] = $metrics['sum_tons'];
         $row['_driver_label'] = getDriverLabelById($pdo, $row['driver_id'] ?? 0);
@@ -311,6 +313,36 @@ function validateRouteData(
     $costRaw = $data['cost'] ?? null;
     $routeType = normalizeRouteType($data['route_type'] ?? '', $data['unload_type'] ?? 'OO');
     $unloadType = resolveUnloadTypeByRouteType($routeType);
+    $directIds = $routeType === ROUTE_TYPE_MIXED_TO_UTILIZER
+        ? normalizeIdsString($data['direct_zayavki_ids'] ?? '')
+        : [];
+    if ($routeType === ROUTE_TYPE_MIXED_TO_UTILIZER) {
+        $allIdsMap = array_fill_keys($ids, true);
+        $outsideIds = [];
+        foreach ($directIds as $directId) {
+            if (!isset($allIdsMap[$directId])) {
+                $outsideIds[] = $directId;
+            }
+        }
+        if (!empty($outsideIds)) {
+            $outsideText = implode(', ', $outsideIds);
+            return [false, 'Прямые заявки должны входить в общий список рейса', [], [
+                'direct_zayavki_ids' => "Не входят в рейс: {$outsideText}",
+            ]];
+        }
+        $warehouseIds = array_values(array_diff($ids, $directIds));
+        if (empty($directIds)) {
+            return [false, 'Укажите заявки, уже находящиеся в машине', [], [
+                'direct_zayavki_ids' => 'Добавьте хотя бы одну прямую заявку',
+            ]];
+        }
+        if (empty($warehouseIds)) {
+            return [false, 'В смешанном рейсе должна быть хотя бы одна заявка для дозагрузки со склада', [], [
+                'zayavki_ids' => 'Добавьте хотя бы одну заявку со склада',
+                'direct_zayavki_ids' => 'Не отмечайте прямыми все заявки рейса',
+            ]];
+        }
+    }
     $sourceWarehouseId = normalizeWarehouseId($pdo, $data['source_warehouse_id'] ?? null);
     $destinationWarehouseId = normalizeWarehouseId($pdo, $data['destination_warehouse_id'] ?? null);
     $legalEntityCode = strtolower(trim((string)($data['legal_entity_code'] ?? '')));
@@ -339,8 +371,9 @@ function validateRouteData(
             ]];
         }
     }
-    if ($requireWarehouses && $routeType === ROUTE_TYPE_WAREHOUSE_TO_UTILIZER && $sourceWarehouseId === null) {
-        return [false, 'Укажите склад отправления', [], ['source_warehouse_id' => 'Укажите склад отправления']];
+    if ($requireWarehouses && in_array($routeType, [ROUTE_TYPE_WAREHOUSE_TO_UTILIZER, ROUTE_TYPE_MIXED_TO_UTILIZER], true) && $sourceWarehouseId === null) {
+        $message = $routeType === ROUTE_TYPE_MIXED_TO_UTILIZER ? 'Укажите склад дозагрузки' : 'Укажите склад отправления';
+        return [false, $message, [], ['source_warehouse_id' => $message]];
     }
 
     $plannedFrom = null;
@@ -383,6 +416,7 @@ function validateRouteData(
 
     return [true, '', [
         'zayavki_ids_canonical' => implode(',', $ids),
+        'direct_zayavki_ids_canonical' => implode(',', $directIds),
         'zayavki_count' => count($ids),
         'driver_id' => $driverId > 0 ? $driverId : null,
         'planned_start_date_from' => $plannedFrom,
@@ -550,6 +584,7 @@ function normalizeRouteType($routeTypeRaw, $unloadTypeRaw = 'OO'): string
         ROUTE_TYPE_GENERATOR_TO_WAREHOUSE,
         ROUTE_TYPE_WAREHOUSE_TO_WAREHOUSE,
         ROUTE_TYPE_WAREHOUSE_TO_UTILIZER,
+        ROUTE_TYPE_MIXED_TO_UTILIZER,
     ];
     if (in_array($routeType, $allowed, true)) {
         return $routeType;
@@ -563,7 +598,7 @@ function normalizeRouteType($routeTypeRaw, $unloadTypeRaw = 'OO'): string
 
 function resolveUnloadTypeByRouteType(string $routeType): string
 {
-    return ($routeType === ROUTE_TYPE_GENERATOR_TO_UTILIZER || $routeType === ROUTE_TYPE_WAREHOUSE_TO_UTILIZER) ? 'OO' : 'SKLAD';
+    return in_array($routeType, [ROUTE_TYPE_GENERATOR_TO_UTILIZER, ROUTE_TYPE_WAREHOUSE_TO_UTILIZER, ROUTE_TYPE_MIXED_TO_UTILIZER], true) ? 'OO' : 'SKLAD';
 }
 
 function normalizeWarehouseId(PDO $pdo, $idRaw): ?int
@@ -664,6 +699,10 @@ function buildRouteTypeLine(PDO $pdo, array $flight): string
         }
         return 'Перемещение между складами';
     }
+    if ($routeType === ROUTE_TYPE_MIXED_TO_UTILIZER) {
+        $from = getWarehouseNameById($pdo, $flight['source_warehouse_id'] ?? 0);
+        return $from !== '' ? ('Прямой забор + дозагрузка: ' . $from) : 'Прямой забор + дозагрузка со склада';
+    }
     $from = getWarehouseNameById($pdo, $flight['source_warehouse_id'] ?? 0);
     return $from !== '' ? ('Вывоз со склада: ' . $from) : 'Вывоз со склада';
 }
@@ -721,6 +760,9 @@ function buildRouteTypeLabel(array $flight): string
     if ($routeType === ROUTE_TYPE_WAREHOUSE_TO_UTILIZER) {
         return 'Склад → Утилизатор';
     }
+    if ($routeType === ROUTE_TYPE_MIXED_TO_UTILIZER) {
+        return 'ОО + Склад → Утилизатор';
+    }
     return 'Обычная выгрузка / Утилизатор';
 }
 
@@ -737,6 +779,7 @@ function buildRouteDiffContext(PDO $pdo, array $before, array $after, int $fligh
     if ((string)($before['planned_start_date_to'] ?? '') !== (string)($after['planned_start_date_to'] ?? '')) $changedFields[] = 'date_to';
     if ((string)($before['cost'] ?? '') !== (string)($after['cost'] ?? '')) $changedFields[] = 'cost';
     if ((string)($before['zayavki_ids'] ?? '') !== (string)($after['zayavki_ids'] ?? '')) $changedFields[] = 'requests';
+    if ((string)($before['direct_zayavki_ids'] ?? '') !== (string)($after['direct_zayavki_ids'] ?? '')) $changedFields[] = 'direct_requests';
     if ((string)($before['route_type'] ?? '') !== (string)($after['route_type'] ?? '')) $changedFields[] = 'route_type';
     if ((string)($before['legal_entity_code'] ?? '') !== (string)($after['legal_entity_code'] ?? '')) $changedFields[] = 'legal_entity';
     if ((string)($before['source_warehouse_id'] ?? '') !== (string)($after['source_warehouse_id'] ?? '')) $changedFields[] = 'source_warehouse';
@@ -1069,6 +1112,7 @@ try {
                     'route_type', 'unload_type',
                     'legal_entity_code',
                     'source_warehouse_id', 'destination_warehouse_id',
+                    'direct_zayavki_ids',
                     'comment',
                 ];
                 foreach ($fallbackFields as $field) {
@@ -1116,6 +1160,7 @@ try {
                 SET comment = :comment,
                     cost = :cost,
                     zayavki_ids = :zayavki_ids,
+                    direct_zayavki_ids = :direct_zayavki_ids,
                     zayavki_count = :count,
                     planned_start_date_from = :planned_from,
                     planned_start_date_to = :planned_to,
@@ -1135,6 +1180,7 @@ try {
                 ':comment' => $name !== '' ? $name : ($before['comment'] ?? ('Рейс #' . $routeId)),
                 ':cost' => $normalized['cost'],
                 ':zayavki_ids' => $normalized['zayavki_ids_canonical'],
+                ':direct_zayavki_ids' => $normalized['direct_zayavki_ids_canonical'],
                 ':count' => $normalized['zayavki_count'],
                 ':planned_from' => $normalized['planned_start_date_from'] ?? $before['planned_start_date_from'] ?? null,
                 ':planned_to' => $normalized['planned_start_date_to'] ?? $before['planned_start_date_to'] ?? null,
@@ -1201,8 +1247,8 @@ try {
         $quotedManagerColumn = quoteIdent($managerColumn);
 
         $stmt = $pdo->prepare("
-            INSERT INTO flights (status, comment, cost, unload_type, route_type, legal_entity_code, source_warehouse_id, destination_warehouse_id, zayavki_ids, zayavki_count, {$quotedManagerColumn}, planned_start_date_from, planned_start_date_to, driver_id, block_date)
-            VALUES (:status, :comment, :cost, :unload_type, :route_type, :legal_entity_code, :source_warehouse_id, :destination_warehouse_id, :zayavki_ids, :count, :assigned_manager_id, :planned_from, :planned_to, :driver_id, NOW())
+            INSERT INTO flights (status, comment, cost, unload_type, route_type, legal_entity_code, source_warehouse_id, destination_warehouse_id, zayavki_ids, direct_zayavki_ids, zayavki_count, {$quotedManagerColumn}, planned_start_date_from, planned_start_date_to, driver_id, block_date)
+            VALUES (:status, :comment, :cost, :unload_type, :route_type, :legal_entity_code, :source_warehouse_id, :destination_warehouse_id, :zayavki_ids, :direct_zayavki_ids, :count, :assigned_manager_id, :planned_from, :planned_to, :driver_id, NOW())
         ");
         $stmt->execute([
             ':status' => STATUS_PLANNED,
@@ -1214,6 +1260,7 @@ try {
             ':source_warehouse_id' => $normalized['source_warehouse_id'],
             ':destination_warehouse_id' => $normalized['destination_warehouse_id'],
             ':zayavki_ids' => $normalized['zayavki_ids_canonical'],
+            ':direct_zayavki_ids' => $normalized['direct_zayavki_ids_canonical'],
             ':count' => $normalized['zayavki_count'],
             ':assigned_manager_id' => $assignedManagerId,
             ':planned_from' => $normalized['planned_start_date_from'],
@@ -1298,6 +1345,7 @@ try {
             $payload = $data;
             if ($wasStarted) {
                 if (!isset($payload['zayavki_ids']) || trim((string)$payload['zayavki_ids']) === '') $payload['zayavki_ids'] = (string)($flight['zayavki_ids'] ?? '');
+                if (!array_key_exists('direct_zayavki_ids', $payload)) $payload['direct_zayavki_ids'] = (string)($flight['direct_zayavki_ids'] ?? '');
                 if (!isset($payload['driver_id']) || (int)$payload['driver_id'] <= 0) $payload['driver_id'] = (int)($flight['driver_id'] ?? 0);
                 if (!isset($payload['planned_start_date_from']) || trim((string)$payload['planned_start_date_from']) === '') $payload['planned_start_date_from'] = (string)($flight['planned_start_date_from'] ?? '');
                 if (!isset($payload['planned_start_date_to']) || trim((string)$payload['planned_start_date_to']) === '') $payload['planned_start_date_to'] = (string)($flight['planned_start_date_to'] ?? '');
@@ -1329,6 +1377,7 @@ try {
                 SET comment = :comment,
                     cost = :cost,
                     zayavki_ids = :zayavki_ids,
+                    direct_zayavki_ids = :direct_zayavki_ids,
                     zayavki_count = :count,
                     planned_start_date_from = :planned_from,
                     planned_start_date_to = :planned_to,
@@ -1346,6 +1395,7 @@ try {
                 ':comment' => $comment !== '' ? $comment : ($flight['comment'] ?? ('Рейс #' . $routeId)),
                 ':cost' => $normalized['cost'],
                 ':zayavki_ids' => $normalized['zayavki_ids_canonical'],
+                ':direct_zayavki_ids' => $normalized['direct_zayavki_ids_canonical'],
                 ':count' => $normalized['zayavki_count'],
                 ':planned_from' => $normalized['planned_start_date_from'],
                 ':planned_to' => $normalized['planned_start_date_to'],
@@ -1364,6 +1414,7 @@ try {
         if ($target === STATUS_STARTED) {
             $payload = $data;
             if (!isset($payload['zayavki_ids']) || trim((string)$payload['zayavki_ids']) === '') $payload['zayavki_ids'] = (string)($flight['zayavki_ids'] ?? '');
+            if (!array_key_exists('direct_zayavki_ids', $payload)) $payload['direct_zayavki_ids'] = (string)($flight['direct_zayavki_ids'] ?? '');
             if (!isset($payload['driver_id']) || (int)$payload['driver_id'] <= 0) $payload['driver_id'] = (int)($flight['driver_id'] ?? 0);
             if (!isset($payload['planned_start_date_from']) || trim((string)$payload['planned_start_date_from']) === '') $payload['planned_start_date_from'] = (string)($flight['planned_start_date_from'] ?? '');
             if (!isset($payload['planned_start_date_to']) || trim((string)$payload['planned_start_date_to']) === '') $payload['planned_start_date_to'] = (string)($flight['planned_start_date_to'] ?? '');
@@ -1409,9 +1460,13 @@ try {
                     if ($startedOwnTransaction && $pdo->inTransaction()) {
                         $pdo->rollBack();
                     }
+                    $missingIds = array_values(array_map('intval', (array)($warehouseMovements['skipped_not_on_source_warehouse'] ?? [])));
+                    $warehouseMessage = !empty($missingIds)
+                        ? ('На складе дозагрузки отсутствуют заявки: ' . implode(', ', $missingIds) . '. Переход в «Вывоз начался» отменён.')
+                        : 'Не удалось списать заявки со склада. Переход в «Вывоз начался» отменён.';
                     jsonOut([
                         'success' => false,
-                        'message' => 'Не удалось списать заявки со склада. Переход в «Вывоз начался» отменён.',
+                        'message' => $warehouseMessage,
                         'warehouse_movements' => $warehouseMovements,
                     ]);
                 }

@@ -31,6 +31,7 @@ function normalizeRouteType($routeTypeRaw, $unloadTypeRaw = 'OO'): string
         'generator_to_warehouse',
         'warehouse_to_warehouse',
         'warehouse_to_utilizer',
+        'mixed_to_utilizer',
     ];
     if (in_array($routeType, $allowed, true)) {
         return $routeType;
@@ -103,6 +104,9 @@ try {
     }
 
     $managerSelect = $managerColumn ? "f.$managerColumn AS assigned_manager_id" : 'NULL AS assigned_manager_id';
+    $directRequestsSelect = isset($columnsMap['direct_zayavki_ids'])
+        ? 'f.direct_zayavki_ids'
+        : "'' AS direct_zayavki_ids";
     $retentionReady = plannedRouteRetentionTableExists($pdo);
     $retentionSelect = $retentionReady
         ? 'prr.expires_at AS retention_expires_at, prr.warning_sent_at AS retention_warning_sent_at'
@@ -125,6 +129,7 @@ try {
                f.source_warehouse_id,
                f.destination_warehouse_id,
                f.zayavki_ids,
+               {$directRequestsSelect},
                f.zayavki_count,
                f.driver_id,
                f.planned_start_date_from,
@@ -178,6 +183,10 @@ try {
             $unloadType = 'OO';
         }
         $routeType = normalizeRouteType($row['route_type'] ?? '', $unloadType);
+        $directIds = $routeType === 'mixed_to_utilizer'
+            ? parseZayavkiIds((string)($row['direct_zayavki_ids'] ?? ''))
+            : [];
+        $warehouseIds = array_values(array_diff($zayIds, $directIds));
         $retentionExpiresAt = trim((string)($row['retention_expires_at'] ?? ''));
         $retentionWarning = false;
         if ($retentionExpiresAt !== '' && (string)($row['status'] ?? '') === 'planned_route') {
@@ -205,6 +214,9 @@ try {
             'source_warehouse_name' => trim((string)($row['source_warehouse_name'] ?? '')),
             'destination_warehouse_name' => trim((string)($row['destination_warehouse_name'] ?? '')),
             'zayavki_ids' => (string)($row['zayavki_ids'] ?? ''),
+            'direct_zayavki_ids' => implode(',', $directIds),
+            'direct_zayavki_count' => count($directIds),
+            'warehouse_zayavki_count' => count($warehouseIds),
             'zayavki_count' => isset($row['zayavki_count']) ? (int)$row['zayavki_count'] : count($zayIds),
             'driver_id' => isset($row['driver_id']) ? (int)$row['driver_id'] : null,
             'driver_label' => trim((string)($row['driver_label'] ?? '')),

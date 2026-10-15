@@ -64,7 +64,7 @@ hr();
 p('SECTION 1 — FLIGHT #' . $flightId);
 hr();
 
-$flight = fetchOne($pdo, 'SELECT id, status, route_type, unload_type, source_warehouse_id, destination_warehouse_id, zayavki_ids, zayavki_count, planned_start_date_from, planned_start_date_to, actual_start_date, actual_end_date, comment, cost, driver_id FROM flights WHERE id = :id LIMIT 1', [':id' => $flightId]);
+$flight = fetchOne($pdo, 'SELECT id, status, route_type, unload_type, source_warehouse_id, destination_warehouse_id, zayavki_ids, direct_zayavki_ids, zayavki_count, planned_start_date_from, planned_start_date_to, actual_start_date, actual_end_date, comment, cost, driver_id FROM flights WHERE id = :id LIMIT 1', [':id' => $flightId]);
 
 if (!$flight) {
     p('FAIL: Рейс #' . $flightId . ' не найден в таблице flights.');
@@ -85,6 +85,12 @@ foreach (explode(',', (string)($flight['zayavki_ids'] ?? '')) as $id) {
     }
 }
 $zayavkiIdsCount = count($zayavkiIds);
+$directZayavkiIds = [];
+foreach (explode(',', (string)($flight['direct_zayavki_ids'] ?? '')) as $id) {
+    $id = (int)trim($id);
+    if ($id > 0) $directZayavkiIds[$id] = $id;
+}
+$warehouseZayavkiIdsCount = count(array_diff($zayavkiIds, array_values($directZayavkiIds)));
 
 $routeType = strtolower(safeStr($flight['route_type'] ?? ''));
 $status = safeStr($flight['status'] ?? '');
@@ -258,6 +264,12 @@ if ($routeType === 'generator_to_utilizer') {
     p('  warehouse_id должен = source_warehouse_id (' . $sourceWid . ').');
     $expectedType = 'issue';
     $expectedCount = $zayavkiIdsCount;
+} elseif ($routeType === 'mixed_to_utilizer') {
+    p('  Ожидание: ' . $warehouseZayavkiIdsCount . ' записей issue только для складской группы.');
+    p('  Прямые заявки без складских движений: ' . count($directZayavkiIds) . '.');
+    p('  warehouse_id должен = source_warehouse_id (' . $sourceWid . ').');
+    $expectedType = 'issue';
+    $expectedCount = $warehouseZayavkiIdsCount;
 } else {
     p('  FAIL: неизвестный route_type.');
 }
@@ -326,6 +338,34 @@ if ($status === 'completed') {
         foreach ($receiptErrors as $err) {
             $messages[] = 'FAIL: warehouse_id mismatch — ' . $err;
             $verdict = 'FAIL';
+        }
+    } elseif (in_array($routeType, ['warehouse_to_utilizer', 'mixed_to_utilizer'], true)) {
+        $expectedIssueIds = $routeType === 'mixed_to_utilizer' ? $warehouseZayavkiIds : $zayavkiIds;
+        $expectedIssueMap = array_fill_keys(array_map('intval', $expectedIssueIds), true);
+        $directMap = array_fill_keys(array_map('intval', $directZayavkiIds), true);
+        $activeIssueCount = 0;
+        foreach (($wmRows ?? []) as $wm) {
+            if (($wm['movement_type'] ?? '') !== 'issue' || ($wm['status'] ?? '') !== 'active') {
+                continue;
+            }
+            $activeIssueCount++;
+            $requestId = (int)($wm['zayavka_id'] ?? 0);
+            if ((int)($wm['warehouse_id'] ?? 0) !== $sourceWid) {
+                $verdict = 'FAIL';
+                $messages[] = "FAIL: issue заявки {$requestId} создан не на складе {$sourceWid}.";
+            }
+            if (!isset($expectedIssueMap[$requestId])) {
+                $verdict = 'FAIL';
+                $messages[] = isset($directMap[$requestId])
+                    ? "FAIL: для прямой заявки {$requestId} создано активное складское списание."
+                    : "FAIL: активное issue содержит постороннюю заявку {$requestId}.";
+            }
+        }
+        if ($activeIssueCount !== count($expectedIssueIds)) {
+            $verdict = 'FAIL';
+            $messages[] = "AFTER COMPLETION: active issue count={$activeIssueCount}, ожидалось=" . count($expectedIssueIds) . '.';
+        } else {
+            $messages[] = "AFTER COMPLETION: active issue count={$activeIssueCount} — OK.";
         }
     }
 }

@@ -88,16 +88,24 @@ function parseZayavki($zayavki_str) {
 
 // Рейсы, которые стартуют со склада, не считаем в блоках
 // "ВЫВЕЗЕНО ПО ПЛАНУ" и "ДОП. ВЫВОЗ".
-function isWarehouseStartFlight($flight) {
+function isWarehouseStartFlight($flight, $zayavka_id = null) {
     // Главный и точный параметр новой системы:
     // flights.route_type:
     // - generator_to_utilizer   — НЕ складский старт, учитываем
     // - generator_to_warehouse  — НЕ складский старт, учитываем
     // - warehouse_to_warehouse  — старт со склада, НЕ учитываем в ВЫВЕЗЕНО ПО ПЛАНУ / ДОП. ВЫВОЗ
     // - warehouse_to_utilizer   — старт со склада, НЕ учитываем в ВЫВЕЗЕНО ПО ПЛАНУ / ДОП. ВЫВОЗ
+    // - mixed_to_utilizer       — учитываем только прямые заявки; складскую часть исключаем
     $route_type = strtolower(trim((string)($flight['route_type'] ?? '')));
 
     if ($route_type !== '') {
+        if ($route_type === 'mixed_to_utilizer') {
+            if ($zayavka_id === null) {
+                return false;
+            }
+            $direct_ids = array_map('strval', parseZayavki($flight['direct_zayavki_ids'] ?? ''));
+            return !in_array((string)$zayavka_id, $direct_ids, true);
+        }
         return in_array($route_type, ['warehouse_to_warehouse', 'warehouse_to_utilizer'], true);
     }
 
@@ -112,7 +120,7 @@ function isWarehouseStartFlight($flight) {
 // Функция для вывода номера рейса по заявке в формате #123
 function getFlightLabelForZayavka($zayavka_id, $period_start, $period_end, $flights, $date_fields = ['actual_start_date'], $unload_type = null, $exclude_warehouse_start = false) {
     foreach ($flights as $flight) {
-        if ($exclude_warehouse_start && isWarehouseStartFlight($flight)) {
+        if ($exclude_warehouse_start && isWarehouseStartFlight($flight, $zayavka_id)) {
             continue;
         }
         if ($unload_type !== null && ($flight['unload_type'] ?? null) !== $unload_type) {
@@ -149,9 +157,6 @@ function getFlightLabelsForZayavkiBlock($zayavki_ids, $period_start, $period_end
     }
 
     foreach ($flights as $flight) {
-        if ($exclude_warehouse_start && isWarehouseStartFlight($flight)) {
-            continue;
-        }
         if ($unload_type !== null && ($flight['unload_type'] ?? null) !== $unload_type) {
             continue;
         }
@@ -172,6 +177,12 @@ function getFlightLabelsForZayavkiBlock($zayavki_ids, $period_start, $period_end
         }
 
         $flight_zayavki = array_map('strval', parseZayavki($flight['zayavki_ids'] ?? ''));
+        if ($exclude_warehouse_start) {
+            $flight_zayavki = array_values(array_filter(
+                $flight_zayavki,
+                static fn($id) => !isWarehouseStartFlight($flight, $id)
+            ));
+        }
         if (!empty(array_intersect($zayavki_ids, $flight_zayavki))) {
             $labels[(string)$flight['id']] = '<span class="flight-number">#' . htmlspecialchars((string)$flight['id']) . '</span>';
         }
@@ -240,7 +251,7 @@ function getZayavkaInfo($zayavka_id, $pdo) {
 // Функция для проверки, вывезена ли заявка в указанном периоде (по actual_start_date)
 function isZayavkaCompletedInPeriod($zayavka_id, $period_start, $period_end, $flights, $exclude_warehouse_start = false) {
     foreach ($flights as $flight) {
-        if ($exclude_warehouse_start && isWarehouseStartFlight($flight)) continue;
+        if ($exclude_warehouse_start && isWarehouseStartFlight($flight, $zayavka_id)) continue;
         if (empty($flight['actual_start_date'])) continue;
         $actual_date = $flight['actual_start_date'];
         if ($actual_date < $period_start || $actual_date > $period_end) continue;
@@ -302,11 +313,16 @@ function isZayavkaInWarehouse($zayavka_id, $period_start, $period_end, $flights)
 function getExtraCompletedZayavki($period_start, $period_end, $planned_zayavki, $flights, $exclude_warehouse_start = false) {
     $extra = [];
     foreach ($flights as $flight) {
-        if ($exclude_warehouse_start && isWarehouseStartFlight($flight)) continue;
         if (empty($flight['actual_start_date'])) continue;
         $actual_date = $flight['actual_start_date'];
         if ($actual_date < $period_start || $actual_date > $period_end) continue;
         $flight_zayavki = parseZayavki($flight['zayavki_ids']);
+        if ($exclude_warehouse_start) {
+            $flight_zayavki = array_values(array_filter(
+                $flight_zayavki,
+                static fn($id) => !isWarehouseStartFlight($flight, $id)
+            ));
+        }
         foreach ($flight_zayavki as $z_id) {
             if (!in_array($z_id, $planned_zayavki) && !in_array($z_id, $extra)) {
                 $extra[] = $z_id;

@@ -71,6 +71,7 @@ function normalizeRouteType($routeTypeRaw, $unloadTypeRaw = 'OO'): string
         'generator_to_warehouse',
         'warehouse_to_warehouse',
         'warehouse_to_utilizer',
+        'mixed_to_utilizer',
     ];
     if (in_array($routeType, $allowed, true)) {
         return $routeType;
@@ -96,6 +97,9 @@ function routeTypeLine(array $row): string
     }
     if ($routeType === 'warehouse_to_utilizer') {
         return $source !== '' ? ('Вывоз со склада: ' . $source) : 'Вывоз со склада';
+    }
+    if ($routeType === 'mixed_to_utilizer') {
+        return $source !== '' ? ('Прямой забор + дозагрузка: ' . $source) : 'Прямой забор + дозагрузка со склада';
     }
     return '';
 }

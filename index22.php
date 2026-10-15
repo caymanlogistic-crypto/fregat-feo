@@ -119,6 +119,9 @@ function formatFlightNumber($flightId, $flightData) {
     if (in_array($routeType, ['warehouse_to_warehouse', 'warehouse_to_utilizer'], true)) {
         return '(с)' . $number;
     }
+    if ($routeType === 'mixed_to_utilizer') {
+        return '(ОО+с)' . $number;
+    }
     if ($routeType === 'generator_to_warehouse' || ($routeType === '' && $unloadType === 'SKLAD')) {
         return $number . '(с)';
     }

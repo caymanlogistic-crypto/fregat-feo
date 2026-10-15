@@ -343,6 +343,14 @@ ssh ... "cd /home/s/spugovxsim/public_html/fregat/feo && git pull"
 - `generator_to_warehouse` — ОО → Временный склад
 - `warehouse_to_warehouse` — Склад → Склад
 - `warehouse_to_utilizer` — Склад → Утилизатор
+- `mixed_to_utilizer` — ОО + Склад → Утилизатор
+
+Для `mixed_to_utilizer`:
+
+- `flights.zayavki_ids` содержит все заявки рейса;
+- `flights.direct_zayavki_ids` содержит только заявки, уже забранные напрямую у ОО;
+- складская группа вычисляется как `zayavki_ids - direct_zayavki_ids`;
+- обе группы обязательны, а прямые заявки должны входить в общий список рейса.
 
 Складские остатки считаются НЕ по `flights.status`, а по:
 
@@ -353,7 +361,8 @@ ssh ... "cd /home/s/spugovxsim/public_html/fregat/feo && git pull"
 - `generator_to_utilizer` — движений нет;
 - `generator_to_warehouse` — `receipt`;
 - `warehouse_to_warehouse` — `transfer_out` + `transfer_in`;
-- `warehouse_to_utilizer` — `issue`.
+- `warehouse_to_utilizer` — `issue`;
+- `mixed_to_utilizer` — `issue` только для складской группы; для прямой группы движений нет.
 
 PASS по складской логике можно ставить только после фактического `SELECT` из `warehouse_movements`.
 
@@ -424,6 +433,7 @@ MAX-уведомления не отключать.
 - `ОО → Временный склад`
 - `Склад → Склад`
 - `Склад → Утилизатор`
+- `ОО + Склад → Утилизатор`
 
 Для складских сообщений:
 
@@ -453,6 +463,7 @@ MAX-уведомления не отключать.
 - `ОО → Временный склад`
 - `Склад → Склад`
 - `Склад → Утилизатор`
+- `ОО + Склад → Утилизатор`
 
 Если агент предлагает UI/UX-улучшение, сначала кратко описать предложение. Вносить в код только после согласования пользователя, если это не часть текущей задачи.
 

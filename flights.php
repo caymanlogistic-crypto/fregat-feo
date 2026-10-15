@@ -78,7 +78,7 @@ function flightWarehouseLabel(array $flight) {
         }
         return $destinationName !== '' ? $destinationName : $sourceName;
     }
-    if ($routeType === 'warehouse_to_utilizer') {
+    if ($routeType === 'warehouse_to_utilizer' || $routeType === 'mixed_to_utilizer') {
         return $sourceName;
     }
     if ($routeType === '' && strtoupper(trim((string)($flight['unload_type'] ?? ''))) === 'SKLAD') {

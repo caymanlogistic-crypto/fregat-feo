@@ -271,12 +271,22 @@ try {
     }
 
     if (empty($blockFlights) && isset($pdo) && $pdo instanceof PDO) {
+        $directRequestsSelect = "'' AS direct_zayavki_ids";
+        try {
+            $directColumnStmt = $pdo->query("SHOW COLUMNS FROM flights LIKE 'direct_zayavki_ids'");
+            if ($directColumnStmt && $directColumnStmt->fetch(PDO::FETCH_ASSOC)) {
+                $directRequestsSelect = 'direct_zayavki_ids';
+            }
+        } catch (Throwable $e) {
+            // Совместимость до выполнения миграции смешанных рейсов.
+        }
         $sqlFallback = "
             SELECT
                 id,
                 status,
                 driver_id,
                 zayavki_ids,
+                {$directRequestsSelect},
                 comment AS name,
                 comment,
                 comment AS route_name,
@@ -529,6 +539,7 @@ try {
             'route_name' => $routeNameValue,
             'direction' => $directionValue,
             'zayavki_ids' => implode(',', $zayavkiIds),
+            'direct_zayavki_ids' => (string)($flight['direct_zayavki_ids'] ?? ''),
             'zayavki_count' => count($zayavkiIds),
             'cost' => $flight['cost'] ?? null,
             'total_kg' => $totalKg,

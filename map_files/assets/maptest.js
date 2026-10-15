@@ -648,7 +648,8 @@ function normalizeRouteType(value, unloadTypeValue) {
         'generator_to_utilizer',
         'generator_to_warehouse',
         'warehouse_to_warehouse',
-        'warehouse_to_utilizer'
+        'warehouse_to_utilizer',
+        'mixed_to_utilizer'
     ]);
     if (allowed.has(v)) return v;
     return normalizeUnloadType(unloadTypeValue) === 'SKLAD'
@@ -657,7 +658,45 @@ function normalizeRouteType(value, unloadTypeValue) {
 }
 
 function resolveUnloadTypeByRouteType(routeType) {
-    return normalizeRouteType(routeType, 'OO') === 'generator_to_utilizer' ? 'OO' : 'SKLAD';
+    return ['generator_to_utilizer', 'warehouse_to_utilizer', 'mixed_to_utilizer']
+        .includes(normalizeRouteType(routeType, 'OO')) ? 'OO' : 'SKLAD';
+}
+
+function parseRequestIds(raw) {
+    return Array.from(new Set(String(raw || '')
+        .split(',')
+        .map(value => value.trim())
+        .filter(value => /^\d+$/.test(value))));
+}
+
+function splitMixedRequestIds(allRaw, directRaw) {
+    const all = parseRequestIds(allRaw);
+    const allSet = new Set(all);
+    const directInput = parseRequestIds(directRaw);
+    const direct = directInput.filter(id => allSet.has(id));
+    const directSet = new Set(direct);
+    return {
+        all,
+        direct,
+        warehouse: all.filter(id => !directSet.has(id)),
+        outside: directInput.filter(id => !allSet.has(id))
+    };
+}
+
+function renderMixedRequestPreview(prefix, allRaw, directRaw) {
+    const split = splitMixedRequestIds(allRaw, directRaw);
+    const directCount = document.getElementById(`${prefix}_direct_request_count`);
+    const warehouseCount = document.getElementById(`${prefix}_warehouse_request_count`);
+    const directPreview = document.getElementById(`${prefix}_direct_request_preview`);
+    const warehousePreview = document.getElementById(`${prefix}_warehouse_request_preview`);
+    if (directCount) directCount.textContent = String(split.direct.length);
+    if (warehouseCount) warehouseCount.textContent = String(split.warehouse.length);
+    if (directPreview) {
+        directPreview.textContent = split.direct.length ? split.direct.join(', ') : '—';
+        if (split.outside.length) directPreview.textContent += ` · не входят в рейс: ${split.outside.join(', ')}`;
+    }
+    if (warehousePreview) warehousePreview.textContent = split.warehouse.length ? split.warehouse.join(', ') : '—';
+    return split;
 }
 
 function getRouteTypeLabel(routeTypeRaw, unloadTypeRaw = 'OO') {
@@ -665,6 +704,7 @@ function getRouteTypeLabel(routeTypeRaw, unloadTypeRaw = 'OO') {
     if (routeType === 'generator_to_warehouse') return '\u0412\u044b\u0433\u0440\u0443\u0437\u043a\u0430 \u043d\u0430 \u0441\u043a\u043b\u0430\u0434';
     if (routeType === 'warehouse_to_warehouse') return '\u0421\u043a\u043b\u0430\u0434 \u2192 \u0421\u043a\u043b\u0430\u0434';
     if (routeType === 'warehouse_to_utilizer') return '\u0421\u043a\u043b\u0430\u0434 \u2192 \u0423\u0442\u0438\u043b\u0438\u0437\u0430\u0442\u043e\u0440';
+    if (routeType === 'mixed_to_utilizer') return '\u041e\u041e + \u0421\u043a\u043b\u0430\u0434 \u2192 \u0423\u0442\u0438\u043b\u0438\u0437\u0430\u0442\u043e\u0440';
     return '\u041e\u0431\u044b\u0447\u043d\u0430\u044f \u0432\u044b\u0433\u0440\u0443\u0437\u043a\u0430 / \u0423\u0442\u0438\u043b\u0438\u0437\u0430\u0442\u043e\u0440';
 }
 
@@ -673,6 +713,7 @@ function getRouteTypeCompactSuffix(routeTypeRaw, unloadTypeRaw = 'OO') {
     if (routeType === 'generator_to_warehouse') return `${UI.bullet}<strong>\u2192 \u0421\u043a\u043b\u0430\u0434</strong>`;
     if (routeType === 'warehouse_to_warehouse') return `${UI.bullet}<strong>\u0421\u043a\u043b\u0430\u0434 \u2192 \u0421\u043a\u043b\u0430\u0434</strong>`;
     if (routeType === 'warehouse_to_utilizer') return `${UI.bullet}<strong>\u0421\u043a\u043b\u0430\u0434 \u2192 \u0423\u0442\u0438\u043b.</strong>`;
+    if (routeType === 'mixed_to_utilizer') return `${UI.bullet}<strong>\u041e\u041e + \u0421\u043a\u043b\u0430\u0434 \u2192 \u0423\u0442\u0438\u043b.</strong>`;
     return '';
 }
 
@@ -681,11 +722,7 @@ function updateFlightModalSummary() {
     if (!summary || !currentEditingMeta) return;
 
     const zayavkiRaw = document.getElementById('edit_zayavki_ids')?.value || '';
-    const ids = zayavkiRaw
-        .split(',')
-        .map(v => v.trim())
-        .filter(v => /^\d+$/.test(v));
-    const uniqueIds = Array.from(new Set(ids));
+    const uniqueIds = parseRequestIds(zayavkiRaw);
 
     const isStarted = currentEditingMeta && String(currentEditingMeta.status) === 'started';
     const fromVal = (isStarted ? document.getElementById('edit_actual_start_date') : document.getElementById('edit_planned_start_date_from'))?.value || '';
@@ -694,6 +731,10 @@ function updateFlightModalSummary() {
     const driverSelect = document.getElementById('edit_driver_id');
     const driverText = driverSelect?.selectedOptions?.[0]?.textContent || UI.driverMissing;
     const routeTypeValue = document.getElementById('edit_route_type')?.value || currentEditingMeta.route_type || '';
+    const normalizedRouteType = normalizeRouteType(routeTypeValue, currentEditingMeta.unload_type || 'OO');
+    const split = normalizedRouteType === 'mixed_to_utilizer'
+        ? splitMixedRequestIds(zayavkiRaw, document.getElementById('edit_direct_zayavki_ids')?.value || '')
+        : null;
 
     let totalTons = 0;
     if (Array.isArray(groupsData)) {
@@ -723,6 +764,7 @@ function updateFlightModalSummary() {
         <div><strong>${UI.labelDriver}:</strong> ${escapeHtml(formatDriverCompactLabel(driverText))}</div>
         <div><strong>${TXT.routeStatus}:</strong> <span class="${statusClass}">${escapeHtml(statusLabel)}</span></div>
         <div><strong>\u041f\u0435\u0440\u0438\u043e\u0434:</strong> ${escapeHtml(periodText)}</div>
+        ${split ? `<div><strong>\u041f\u0440\u044f\u043c\u044b\u0435 / \u0441\u043e \u0441\u043a\u043b\u0430\u0434\u0430:</strong> ${split.direct.length} / ${split.warehouse.length}</div>` : ''}
     `;
 }
 
@@ -747,6 +789,8 @@ function buildFoundChangePreview(meta) {
     const currentIdsArr = zayavkiVal.split(',').map(v => v.trim()).filter(Boolean);
     const previousIds = previousIdsArr.join(',');
     const currentIds = currentIdsArr.join(',');
+    const previousDirectIds = parseRequestIds(meta.direct_zayavki_ids || '').join(',');
+    const currentDirectIds = parseRequestIds(document.getElementById('edit_direct_zayavki_ids')?.value || '').join(',');
     const previousRouteType = normalizeRouteType(meta.route_type || '', meta.unload_type || 'OO');
 
     const blocks = [];
@@ -777,6 +821,9 @@ function buildFoundChangePreview(meta) {
     }
     if (previousRouteType !== currentRouteType) {
         blocks.push(`\u041c\u0430\u0440\u0448\u0440\u0443\u0442 \u0433\u0440\u0443\u0437\u0430:\n\u0411\u044b\u043b\u043e: ${getRouteTypeLabel(previousRouteType, meta.unload_type || 'OO')}\n\u0421\u0442\u0430\u043b\u043e: ${getRouteTypeLabel(currentRouteType, resolveUnloadTypeByRouteType(currentRouteType))}`);
+    }
+    if (currentRouteType === 'mixed_to_utilizer' && previousDirectIds !== currentDirectIds) {
+        blocks.push(`Прямые заявки (уже в машине):\nБыло: ${previousDirectIds || 'не указано'}\nСтало: ${currentDirectIds || 'не указано'}`);
     }
     if (blocks.length === 0) return '';
     const htmlBlocks = blocks.map(b => `<div style="white-space:pre-wrap;margin:6px 0">${escapeHtml(b)}</div>`);
@@ -1269,7 +1316,7 @@ function clearFlightValidationErrors() {
         wrap.style.display = 'none';
         wrap.innerHTML = '';
     }
-    ['edit_comment', 'edit_driver_id', 'edit_planned_start_date_from', 'edit_planned_start_date_to', 'edit_actual_start_date', 'edit_actual_end_date', 'edit_cost', 'edit_zayavki_ids', 'edit_route_type', 'edit_source_warehouse_id', 'edit_destination_warehouse_id', 'edit_legal_entity']
+    ['edit_comment', 'edit_driver_id', 'edit_planned_start_date_from', 'edit_planned_start_date_to', 'edit_actual_start_date', 'edit_actual_end_date', 'edit_cost', 'edit_zayavki_ids', 'edit_direct_zayavki_ids', 'edit_route_type', 'edit_source_warehouse_id', 'edit_destination_warehouse_id', 'edit_legal_entity']
         .forEach((id) => {
             const el = document.getElementById(id);
             if (el) el.classList.remove('field-error');
@@ -1285,7 +1332,7 @@ function clearFlightValidationErrors() {
 
 function showFlightValidationErrors(errorMap, headerText = UI.msgTransitionValidationHeader) {
     const wrap = document.getElementById('flightValidationErrors');
-    const orderedFields = ['comment', 'legal_entity_code', 'driver_id', 'planned_start_date_from', 'planned_start_date_to', 'actual_start_date', 'actual_end_date', 'cost', 'zayavki_ids', 'route_type', 'source_warehouse_id', 'destination_warehouse_id'];
+    const orderedFields = ['comment', 'legal_entity_code', 'driver_id', 'planned_start_date_from', 'planned_start_date_to', 'actual_start_date', 'actual_end_date', 'cost', 'zayavki_ids', 'direct_zayavki_ids', 'route_type', 'source_warehouse_id', 'destination_warehouse_id'];
     const fieldToInput = {
         comment: 'edit_comment',
         legal_entity_code: 'edit_legal_entity',
@@ -1296,6 +1343,7 @@ function showFlightValidationErrors(errorMap, headerText = UI.msgTransitionValid
         actual_end_date: 'edit_actual_end_date',
         cost: 'edit_cost',
         zayavki_ids: 'edit_zayavki_ids',
+        direct_zayavki_ids: 'edit_direct_zayavki_ids',
         route_type: 'edit_route_type',
         source_warehouse_id: 'edit_source_warehouse_id',
         destination_warehouse_id: 'edit_destination_warehouse_id'
@@ -1310,6 +1358,7 @@ function showFlightValidationErrors(errorMap, headerText = UI.msgTransitionValid
         actual_end_date: UI.msgTransitionValidationDates,
         cost: UI.msgTransitionValidationCost,
         zayavki_ids: UI.msgTransitionValidationRequests,
+        direct_zayavki_ids: 'Прямые заявки смешанного рейса',
         route_type: UI.msgTransitionValidationRouteType,
         source_warehouse_id: UI.msgTransitionValidationWarehouseSource,
         destination_warehouse_id: UI.msgTransitionValidationWarehouseDestination
@@ -1357,10 +1406,8 @@ function validateRequiredForStrictTransition() {
     const routeType = normalizeRouteType(routeTypeRaw, currentEditingMeta?.unload_type || 'OO');
     const sourceWarehouseId = String(document.getElementById('edit_source_warehouse_id')?.value || '').trim();
     const destinationWarehouseId = String(document.getElementById('edit_destination_warehouse_id')?.value || '').trim();
-    const ids = String(document.getElementById('edit_zayavki_ids')?.value || '')
-        .split(',')
-        .map(v => v.trim())
-        .filter(v => /^\d+$/.test(v));
+    const allRequestsRaw = String(document.getElementById('edit_zayavki_ids')?.value || '');
+    const ids = parseRequestIds(allRequestsRaw);
 
     if (!driverId) errors.driver_id = true;
     if (!document.querySelector('input[name="edit_legal_entity_code"]:checked')) errors.legal_entity_code = true;
@@ -1379,8 +1426,14 @@ function validateRequiredForStrictTransition() {
             errors.destination_warehouse_id = true;
         }
     }
-    if (routeType === 'warehouse_to_utilizer' && !sourceWarehouseId) {
+    if ((routeType === 'warehouse_to_utilizer' || routeType === 'mixed_to_utilizer') && !sourceWarehouseId) {
         errors.source_warehouse_id = true;
+    }
+    if (routeType === 'mixed_to_utilizer') {
+        const split = splitMixedRequestIds(allRequestsRaw, document.getElementById('edit_direct_zayavki_ids')?.value || '');
+        if (split.direct.length === 0 || split.warehouse.length === 0 || split.outside.length > 0) {
+            errors.direct_zayavki_ids = true;
+        }
     }
     return errors;
 }
@@ -1607,8 +1660,11 @@ function syncRouteTypeFieldsVisibility(routeTypeRaw) {
     const routeTypeInput = document.getElementById('edit_route_type');
     const sourceWarehouseInput = document.getElementById('edit_source_warehouse_id');
     const destinationWarehouseInput = document.getElementById('edit_destination_warehouse_id');
+    const mixedSplit = document.getElementById('edit_mixed_request_split');
+    const requestsLabel = document.getElementById('edit_zayavki_ids_label');
+    const directRequestsInput = document.getElementById('edit_direct_zayavki_ids');
 
-    const showSource = routeType === 'warehouse_to_warehouse' || routeType === 'warehouse_to_utilizer';
+    const showSource = routeType === 'warehouse_to_warehouse' || routeType === 'warehouse_to_utilizer' || routeType === 'mixed_to_utilizer';
     const showDest = routeType === 'generator_to_warehouse' || routeType === 'warehouse_to_warehouse';
     if (sourceWrap) sourceWrap.style.display = showSource ? 'block' : 'none';
     if (destWrap) destWrap.style.display = showDest ? 'block' : 'none';
@@ -1616,6 +1672,11 @@ function syncRouteTypeFieldsVisibility(routeTypeRaw) {
         const hasVisibleFields = showSource || showDest;
         warehouseGroup.style.display = hasVisibleFields ? 'grid' : 'none';
         warehouseGroup.classList.toggle('is-visible', hasVisibleFields);
+    }
+    if (mixedSplit) mixedSplit.style.display = routeType === 'mixed_to_utilizer' ? 'block' : 'none';
+    if (requestsLabel) requestsLabel.textContent = routeType === 'mixed_to_utilizer' ? 'Все заявки рейса *' : 'Список заявок *';
+    if (routeType === 'mixed_to_utilizer') {
+        renderMixedRequestPreview('edit', document.getElementById('edit_zayavki_ids')?.value || '', directRequestsInput?.value || '');
     }
 }
 
@@ -1998,6 +2059,7 @@ async function openFlightEditModal(routeId, source) {
     const costInput = document.getElementById('edit_cost');
     const commentInput = document.getElementById('edit_comment');
     const zayavkiInput = document.getElementById('edit_zayavki_ids');
+    const directZayavkiInput = document.getElementById('edit_direct_zayavki_ids');
     const routeTypeInput = document.getElementById('edit_route_type');
     const sourceWarehouseInput = document.getElementById('edit_source_warehouse_id');
     const destinationWarehouseInput = document.getElementById('edit_destination_warehouse_id');
@@ -2032,6 +2094,7 @@ async function openFlightEditModal(routeId, source) {
     if (costInput) costInput.value = (meta.cost !== null && meta.cost !== undefined) ? String(meta.cost) : '';
     if (commentInput) commentInput.value = String(meta.comment || routeTitle || '');
     if (zayavkiInput) zayavkiInput.value = String(meta.zayavki_ids || '');
+    if (directZayavkiInput) directZayavkiInput.value = String(meta.direct_zayavki_ids || '');
     const initialRouteType = normalizeRouteType(meta.route_type || '', meta.unload_type || 'OO');
     if (routeTypeInput) routeTypeInput.value = initialRouteType;
     document.querySelectorAll('input[name="edit_legal_entity_code"]').forEach((input) => {
@@ -2154,6 +2217,7 @@ function setFlightEditReadOnlyMode(isReadOnly) {
         'edit_actual_end_date',
         'edit_cost',
         'edit_zayavki_ids',
+        'edit_direct_zayavki_ids',
         'edit_route_type',
         'edit_source_warehouse_id',
         'edit_destination_warehouse_id',
@@ -2165,7 +2229,7 @@ function setFlightEditReadOnlyMode(isReadOnly) {
         if (!el) return;
         if (isReadOnly) {
             el.setAttribute('disabled', 'disabled');
-            if (id === 'edit_comment' || id === 'edit_zayavki_ids') {
+            if (id === 'edit_comment' || id === 'edit_zayavki_ids' || id === 'edit_direct_zayavki_ids') {
                 el.setAttribute('readonly', 'readonly');
             }
         } else {
@@ -2194,7 +2258,8 @@ function setLabelTextForField(fieldId, text) {
 function syncRequiredFieldLabels(status) {
     const isPlanned = status === 'planned_route';
     setLabelTextForField('edit_comment', `\u041a\u043e\u043c\u043c\u0435\u043d\u0442\u0430\u0440\u0438\u0439 / \u0437\u0430\u0433\u043e\u043b\u043e\u0432\u043e\u043a *`);
-    setLabelTextForField('edit_zayavki_ids', `\u0421\u043f\u0438\u0441\u043e\u043a \u0437\u0430\u044f\u0432\u043e\u043a *`);
+    const routeType = normalizeRouteType(document.getElementById('edit_route_type')?.value || '', currentEditingMeta?.unload_type || 'OO');
+    setLabelTextForField('edit_zayavki_ids', routeType === 'mixed_to_utilizer' ? `\u0412\u0441\u0435 \u0437\u0430\u044f\u0432\u043a\u0438 \u0440\u0435\u0439\u0441\u0430 *` : `\u0421\u043f\u0438\u0441\u043e\u043a \u0437\u0430\u044f\u0432\u043e\u043a *`);
     setLabelTextForField('edit_driver_id', isPlanned ? `${UI.modalDriver} *` : UI.modalDriver);
     setLabelTextForField('edit_cost', isPlanned ? `${UI.modalCost} *` : UI.modalCost);
     const plannedRangeTitle = document.getElementById('plannedDateRangeTitle');
@@ -2499,6 +2564,7 @@ function collectFlightEditPayload() {
     const costInput = document.getElementById('edit_cost');
     const commentInput = document.getElementById('edit_comment');
     const zayavkiInput = document.getElementById('edit_zayavki_ids');
+    const directZayavkiInput = document.getElementById('edit_direct_zayavki_ids');
     const actualFromInput = document.getElementById('edit_actual_start_date');
     const actualToInput = document.getElementById('edit_actual_end_date');
     const routeTypeInput = document.getElementById('edit_route_type');
@@ -2517,6 +2583,7 @@ function collectFlightEditPayload() {
         cost: costInput ? costInput.value : '',
         comment: commentInput ? commentInput.value : '',
         zayavki_ids: zayavkiInput ? zayavkiInput.value : '',
+        direct_zayavki_ids: routeType === 'mixed_to_utilizer' && directZayavkiInput ? directZayavkiInput.value : '',
         unload_type: resolveUnloadTypeByRouteType(routeType),
         route_type: routeType,
         legal_entity_code: legalEntityInput ? legalEntityInput.value : '',
@@ -2559,6 +2626,19 @@ async function saveFlightEdit(options = {}) {
         }
     }
     const saveErrors = isStrictEdit ? validateRequiredForStrictTransition() : {};
+    const saveRouteType = normalizeRouteType(document.getElementById('edit_route_type')?.value || '', currentEditingMeta?.unload_type || 'OO');
+    if (saveRouteType === 'mixed_to_utilizer') {
+        const split = splitMixedRequestIds(
+            document.getElementById('edit_zayavki_ids')?.value || '',
+            document.getElementById('edit_direct_zayavki_ids')?.value || ''
+        );
+        if (split.direct.length === 0 || split.warehouse.length === 0 || split.outside.length > 0) {
+            saveErrors.direct_zayavki_ids = true;
+        }
+        if (!document.getElementById('edit_source_warehouse_id')?.value) {
+            saveErrors.source_warehouse_id = true;
+        }
+    }
     if (!document.querySelector('input[name="edit_legal_entity_code"]:checked')) {
         saveErrors.legal_entity_code = true;
     }
@@ -2623,6 +2703,8 @@ function hasUnsavedFlightEditChanges() {
     if (String(costInput?.value || '').trim() !== String(currentEditingMeta.cost ?? '')) return true;
     const zayavkiInput = document.getElementById('edit_zayavki_ids');
     if (String(zayavkiInput?.value || '').replace(/\s/g, '') !== String(currentEditingMeta.zayavki_ids || '').replace(/\s/g, '')) return true;
+    const directZayavkiInput = document.getElementById('edit_direct_zayavki_ids');
+    if (String(directZayavkiInput?.value || '').replace(/\s/g, '') !== String(currentEditingMeta.direct_zayavki_ids || '').replace(/\s/g, '')) return true;
     const commentInput = document.getElementById('edit_comment');
     if ((commentInput?.value || '').trim() !== (currentEditingMeta.comment || '').trim()) return true;
     const routeTypeInput = document.getElementById('edit_route_type');
@@ -2693,6 +2775,7 @@ async function transferPlannedToFound(routeId) {
             id: Number(routeId),
             target_status: 'found',
             zayavki_ids: payload.zayavki_ids || meta.zayavki_ids || '',
+            direct_zayavki_ids: payload.direct_zayavki_ids || meta.direct_zayavki_ids || '',
             driver_id: Number(payload.driver_id || meta.driver_id || 0),
             assigned_manager_id: meta.assigned_manager_id || '',
             planned_start_date_from: payload.planned_start_date_from || meta.planned_start_date_from || '',
@@ -3137,6 +3220,7 @@ function ensureCreateRouteModal() {
             <option value="generator_to_warehouse">\u0412\u044b\u0433\u0440\u0443\u0437\u043a\u0430 \u043d\u0430 \u0441\u043a\u043b\u0430\u0434</option>
             <option value="warehouse_to_warehouse">\u041f\u0435\u0440\u0435\u043c\u0435\u0449\u0435\u043d\u0438\u0435 \u0441\u043a\u043b\u0430\u0434 \u2192 \u0441\u043a\u043b\u0430\u0434</option>
             <option value="warehouse_to_utilizer">\u0412\u044b\u0432\u043e\u0437 \u0441\u043e \u0441\u043a\u043b\u0430\u0434\u0430 \u043d\u0430 \u0443\u0442\u0438\u043b\u0438\u0437\u0430\u0442\u043e\u0440</option>
+            <option value="mixed_to_utilizer">\u041e\u041e + \u0421\u043a\u043b\u0430\u0434 \u2192 \u0423\u0442\u0438\u043b\u0438\u0437\u0430\u0442\u043e\u0440</option>
         </select>
         <div class="flight-warehouse-group" id="create_warehouse_group" style="display:none;">
             <div class="flight-warehouse-wrap" id="create_source_warehouse_wrap" style="display:none;">
@@ -3146,6 +3230,15 @@ function ensureCreateRouteModal() {
             <div class="flight-warehouse-wrap" id="create_destination_warehouse_wrap" style="display:none;">
                 <label class="flight-modal-label" for="create_destination_warehouse_id">\u0421\u043a\u043b\u0430\u0434 \u043d\u0430\u0437\u043d\u0430\u0447\u0435\u043d\u0438\u044f</label>
                 <select class="flight-modal-input" id="create_destination_warehouse_id"></select>
+            </div>
+        </div>
+        <div class="mixed-request-split" id="create_mixed_request_split" style="display:none; margin-top:8px;">
+            <div class="mixed-request-help">\u0418\u0437 \u0432\u044b\u0431\u0440\u0430\u043d\u043d\u044b\u0445 \u0437\u0430\u044f\u0432\u043e\u043a \u0443\u043a\u0430\u0436\u0438\u0442\u0435 \u0442\u043e\u043b\u044c\u043a\u043e \u0442\u0435, \u043a\u043e\u0442\u043e\u0440\u044b\u0435 \u0432\u043e\u0434\u0438\u0442\u0435\u043b\u044c \u0437\u0430\u0431\u0435\u0440\u0451\u0442 \u043d\u0430\u043f\u0440\u044f\u043c\u0443\u044e \u0443 \u041e\u041e. \u041e\u0441\u0442\u0430\u043b\u044c\u043d\u044b\u0435 \u0431\u0443\u0434\u0443\u0442 \u0441\u043f\u0438\u0441\u0430\u043d\u044b \u0441\u043e \u0441\u043a\u043b\u0430\u0434\u0430.</div>
+            <label class="flight-modal-label" for="create_direct_zayavki_ids">\u0423\u0436\u0435 \u0432 \u043c\u0430\u0448\u0438\u043d\u0435 / \u043f\u0440\u044f\u043c\u043e\u0439 \u0437\u0430\u0431\u043e\u0440</label>
+            <textarea class="flight-modal-input" id="create_direct_zayavki_ids" rows="2" placeholder="\u041d\u0430\u043f\u0440\u0438\u043c\u0435\u0440: 291382"></textarea>
+            <div class="mixed-request-grid" aria-live="polite">
+                <div class="mixed-request-panel mixed-request-panel-direct"><div class="mixed-request-panel-title">\u041d\u0430\u043f\u0440\u044f\u043c\u0443\u044e \u043e\u0442 \u041e\u041e <span id="create_direct_request_count">0</span></div><div class="mixed-request-ids" id="create_direct_request_preview">\u2014</div></div>
+                <div class="mixed-request-panel mixed-request-panel-warehouse"><div class="mixed-request-panel-title">\u0417\u0430\u0431\u0440\u0430\u0442\u044c \u0441\u043e \u0441\u043a\u043b\u0430\u0434\u0430 <span id="create_warehouse_request_count">0</span></div><div class="mixed-request-ids" id="create_warehouse_request_preview">\u2014</div></div>
             </div>
         </div>
         <div class="flight-validation-errors" id="createRouteErrors" style="display:none;"></div>
@@ -3316,8 +3409,10 @@ function openCreateRouteModal() {
     syncCreateRouteManagerSelect();
     syncCreateRouteWarehouseVisibility();
     const nameInput = document.getElementById('create_route_name');
+    const directRequestsInput = document.getElementById('create_direct_zayavki_ids');
     const errors = document.getElementById('createRouteErrors');
     if (nameInput) nameInput.value = '';
+    if (directRequestsInput) directRequestsInput.value = '';
     document.querySelectorAll('input[name="create_legal_entity_code"]').forEach((input) => { input.checked = false; });
     document.getElementById('create_legal_entity')?.classList.remove('field-error');
     if (errors) {
@@ -3328,6 +3423,7 @@ function openCreateRouteModal() {
     const destSelect = document.getElementById('create_destination_warehouse_id');
     if (sourceSelect) sourceSelect.innerHTML = buildWarehouseOptions('', '\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u0441\u043a\u043b\u0430\u0434 \u043e\u0442\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u0438\u044f');
     if (destSelect) destSelect.innerHTML = buildWarehouseOptions('', '\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u0441\u043a\u043b\u0430\u0434 \u043d\u0430\u0437\u043d\u0430\u0447\u0435\u043d\u0438\u044f');
+    syncCreateRouteWarehouseVisibility();
     toggleCreateRouteModal(true);
     if (nameInput) setTimeout(() => nameInput.focus(), 0);
 }
@@ -3338,7 +3434,8 @@ function syncCreateRouteWarehouseVisibility() {
     const sourceWrap = document.getElementById('create_source_warehouse_wrap');
     const destWrap = document.getElementById('create_destination_warehouse_wrap');
     const warehouseGroup = document.getElementById('create_warehouse_group');
-    const showSource = routeType === 'warehouse_to_warehouse' || routeType === 'warehouse_to_utilizer';
+    const mixedSplit = document.getElementById('create_mixed_request_split');
+    const showSource = routeType === 'warehouse_to_warehouse' || routeType === 'warehouse_to_utilizer' || routeType === 'mixed_to_utilizer';
     const showDest = routeType === 'generator_to_warehouse' || routeType === 'warehouse_to_warehouse';
     if (sourceWrap) sourceWrap.style.display = showSource ? 'block' : 'none';
     if (destWrap) destWrap.style.display = showDest ? 'block' : 'none';
@@ -3346,6 +3443,10 @@ function syncCreateRouteWarehouseVisibility() {
         const hasVisibleFields = showSource || showDest;
         warehouseGroup.style.display = hasVisibleFields ? 'grid' : 'none';
         warehouseGroup.classList.toggle('is-visible', hasVisibleFields);
+    }
+    if (mixedSplit) mixedSplit.style.display = routeType === 'mixed_to_utilizer' ? 'block' : 'none';
+    if (routeType === 'mixed_to_utilizer') {
+        renderMixedRequestPreview('create', selectedOrder.join(','), document.getElementById('create_direct_zayavki_ids')?.value || '');
     }
 }
 
@@ -3384,6 +3485,7 @@ function confirmCreateRoute() {
     const sourceWarehouseInput = document.getElementById('create_source_warehouse_id');
     const destinationWarehouseInput = document.getElementById('create_destination_warehouse_id');
     const legalEntityInput = document.querySelector('input[name="create_legal_entity_code"]:checked');
+    const directRequestsInput = document.getElementById('create_direct_zayavki_ids');
     const errorBox = document.getElementById('createRouteErrors');
     const saveBtn = document.getElementById('saveRouteBtn');
 
@@ -3428,10 +3530,45 @@ function confirmCreateRoute() {
         }
         return;
     }
+    if ((routeType === 'warehouse_to_utilizer' || routeType === 'mixed_to_utilizer') && !sourceWarehouseId) {
+        if (errorBox) {
+            errorBox.style.display = 'block';
+            errorBox.textContent = routeType === 'mixed_to_utilizer' ? 'Укажите склад дозагрузки' : 'Укажите склад отправления';
+        }
+        sourceWarehouseInput?.focus();
+        return;
+    }
+    if (routeType === 'warehouse_to_warehouse') {
+        if (!sourceWarehouseId || !destinationWarehouseId || sourceWarehouseId === destinationWarehouseId) {
+            if (errorBox) {
+                errorBox.style.display = 'block';
+                errorBox.textContent = sourceWarehouseId === destinationWarehouseId && sourceWarehouseId
+                    ? 'Склады отправления и назначения должны отличаться'
+                    : 'Укажите склады отправления и назначения';
+            }
+            return;
+        }
+    }
+    const mixedSplit = routeType === 'mixed_to_utilizer'
+        ? splitMixedRequestIds(selectedOrder.join(','), directRequestsInput?.value || '')
+        : null;
+    if (mixedSplit && (mixedSplit.direct.length === 0 || mixedSplit.warehouse.length === 0 || mixedSplit.outside.length > 0)) {
+        if (errorBox) {
+            errorBox.style.display = 'block';
+            errorBox.textContent = mixedSplit.outside.length
+                ? `Не входят в выбранные заявки: ${mixedSplit.outside.join(', ')}`
+                : (mixedSplit.direct.length === 0
+                    ? 'Укажите хотя бы одну прямую заявку'
+                    : 'Оставьте хотя бы одну заявку для дозагрузки со склада');
+        }
+        directRequestsInput?.focus();
+        return;
+    }
 
     const costVal = document.getElementById('route-cost-input')?.value.trim() || '';
     const payload = {
         zayavki_ids: selectedOrder.join(','),
+        direct_zayavki_ids: mixedSplit ? mixedSplit.direct.join(',') : '',
         name: routeName,
         assigned_manager_id: Number(managerId),
         cost: (costVal !== '' && !isNaN(costVal)) ? parseFloat(costVal) : null,
@@ -3460,6 +3597,7 @@ function promptSaveRoute() {
         const existingUnloadType = cachedMeta.unload_type || 'OO';
         const existingSourceWarehouseId = cachedMeta.source_warehouse_id || '';
         const existingDestinationWarehouseId = cachedMeta.destination_warehouse_id || '';
+        const existingDirectZayavkiIds = cachedMeta.direct_zayavki_ids || '';
         const normalizedRouteType = normalizeRouteType(existingRouteType, existingUnloadType);
         const existingDriverId = cachedMeta.driver_id || '';
         const existingAssignedManagerId = cachedMeta.assigned_manager_id || '';
@@ -3471,6 +3609,7 @@ function promptSaveRoute() {
             id: editingRouteId,
             name: currentName,
             zayavki_ids: selectedOrder.join(','),
+            direct_zayavki_ids: normalizedRouteType === 'mixed_to_utilizer' ? existingDirectZayavkiIds : '',
             driver_id: existingDriverId,
             assigned_manager_id: existingAssignedManagerId,
             legal_entity_code: existingLegalEntityCode,
@@ -3850,6 +3989,7 @@ function init() {
     if (routeTypeInput) {
         routeTypeInput.addEventListener('change', () => {
             syncRouteTypeFieldsVisibility(routeTypeInput.value);
+            syncRequiredFieldLabels(currentEditingMeta?.status || 'planned_route');
             updateFlightModalSummary();
         });
     }
@@ -3857,6 +3997,18 @@ function init() {
     if (createRouteTypeInput) {
         createRouteTypeInput.addEventListener('change', () => {
             syncCreateRouteWarehouseVisibility();
+        });
+    }
+    const editDirectRequestsInput = document.getElementById('edit_direct_zayavki_ids');
+    if (editDirectRequestsInput) {
+        editDirectRequestsInput.addEventListener('input', () => {
+            renderMixedRequestPreview('edit', document.getElementById('edit_zayavki_ids')?.value || '', editDirectRequestsInput.value);
+        });
+    }
+    const createDirectRequestsInput = document.getElementById('create_direct_zayavki_ids');
+    if (createDirectRequestsInput) {
+        createDirectRequestsInput.addEventListener('input', () => {
+            renderMixedRequestPreview('create', selectedOrder.join(','), createDirectRequestsInput.value);
         });
     }
 
@@ -3883,7 +4035,7 @@ if (startCancelBtn) startCancelBtn.addEventListener('click', closeStartConfirmMo
             }
         });
     }
-    ['edit_driver_id', 'edit_planned_start_date_from', 'edit_planned_start_date_to', 'edit_actual_start_date', 'edit_actual_end_date', 'edit_cost', 'edit_zayavki_ids', 'edit_route_type', 'edit_source_warehouse_id', 'edit_destination_warehouse_id'].forEach((id) => {
+    ['edit_driver_id', 'edit_planned_start_date_from', 'edit_planned_start_date_to', 'edit_actual_start_date', 'edit_actual_end_date', 'edit_cost', 'edit_zayavki_ids', 'edit_direct_zayavki_ids', 'edit_route_type', 'edit_source_warehouse_id', 'edit_destination_warehouse_id'].forEach((id) => {
         const el = document.getElementById(id);
         if (el) {
             el.addEventListener('input', () => {
@@ -3894,6 +4046,9 @@ if (startCancelBtn) startCancelBtn.addEventListener('click', closeStartConfirmMo
                     errWrap.innerHTML = '';
                 }
                 updateFlightModalSummary();
+                if (id === 'edit_zayavki_ids' || id === 'edit_direct_zayavki_ids') {
+                    renderMixedRequestPreview('edit', document.getElementById('edit_zayavki_ids')?.value || '', document.getElementById('edit_direct_zayavki_ids')?.value || '');
+                }
                 const previewEl = document.getElementById('flightChangePreview');
                 const previewHtml = buildFoundChangePreview(currentEditingMeta);
                 if (previewEl) {

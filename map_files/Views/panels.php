@@ -172,6 +172,7 @@ $t = static function (string $key, string $fallback): string {
                     <option value="generator_to_warehouse"><?= $t('route.type.generator_to_warehouse', 'Выгрузка на склад') ?></option>
                     <option value="warehouse_to_warehouse"><?= $t('route.type.warehouse_to_warehouse', 'Перемещение склад → склад') ?></option>
                     <option value="warehouse_to_utilizer"><?= $t('route.type.warehouse_to_utilizer', 'Вывоз со склада на утилизатор') ?></option>
+                    <option value="mixed_to_utilizer"><?= $t('route.type.mixed_to_utilizer', 'ОО + Склад → Утилизатор') ?></option>
                 </select>
             </div>
             <div class="flight-warehouse-group" id="edit_warehouse_group" style="display:none;">
@@ -191,8 +192,25 @@ $t = static function (string $key, string $fallback): string {
                 </div>
             </div>
             <div class="flight-zayavki-wrap">
-                <label class="flight-modal-label" for="edit_zayavki_ids"><?= $t('route.field.requests', 'Список заявок') ?></label>
+                <label class="flight-modal-label" id="edit_zayavki_ids_label" for="edit_zayavki_ids"><?= $t('route.field.requests', 'Список заявок') ?></label>
                 <textarea class="flight-modal-input" id="edit_zayavki_ids" rows="3" placeholder="101,104,105"></textarea>
+            </div>
+            <div class="mixed-request-split" id="edit_mixed_request_split" style="display:none;">
+                <div class="mixed-request-help">
+                    Укажите только заявки, которые водитель уже забрал напрямую у отходообразователей. Остальные заявки система автоматически отнесёт к дозагрузке со склада.
+                </div>
+                <label class="flight-modal-label" for="edit_direct_zayavki_ids">Уже в машине — прямой забор у ОО</label>
+                <textarea class="flight-modal-input" id="edit_direct_zayavki_ids" rows="2" placeholder="Например: 291382"></textarea>
+                <div class="mixed-request-grid" id="edit_request_split_preview" aria-live="polite">
+                    <div class="mixed-request-panel mixed-request-panel-direct">
+                        <div class="mixed-request-panel-title">Напрямую от ОО <span id="edit_direct_request_count">0</span></div>
+                        <div class="mixed-request-ids" id="edit_direct_request_preview">—</div>
+                    </div>
+                    <div class="mixed-request-panel mixed-request-panel-warehouse">
+                        <div class="mixed-request-panel-title">Забрать со склада <span id="edit_warehouse_request_count">0</span></div>
+                        <div class="mixed-request-ids" id="edit_warehouse_request_preview">—</div>
+                    </div>
+                </div>
             </div>
         </div>
 

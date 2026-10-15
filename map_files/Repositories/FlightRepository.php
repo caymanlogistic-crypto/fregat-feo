@@ -66,6 +66,15 @@ class FlightRepository
 
     public function getFlightsForRouteBlocks()
     {
+        $directRequestsSelect = "'' AS direct_zayavki_ids";
+        try {
+            $columnStmt = $this->pdo->query("SHOW COLUMNS FROM flights LIKE 'direct_zayavki_ids'");
+            if ($columnStmt && $columnStmt->fetch(PDO::FETCH_ASSOC)) {
+                $directRequestsSelect = 'direct_zayavki_ids';
+            }
+        } catch (Throwable $e) {
+            // До выполнения миграции старые рейсы остаются доступны в интерфейсе.
+        }
         // IMPORTANT: the production flights table does NOT have name/route_name/direction columns.
         // The route title is stored in flights.comment. Expose compatible aliases for the UI layer.
         $sql = "
@@ -74,6 +83,7 @@ class FlightRepository
                 status,
                 driver_id,
                 zayavki_ids,
+                {$directRequestsSelect},
                 comment AS name,
                 comment,
                 comment AS route_name,
@@ -81,7 +91,11 @@ class FlightRepository
                 cost,
                 planned_start_date_from,
                 planned_start_date_to,
-                legal_entity_code
+                unload_type,
+                route_type,
+                legal_entity_code,
+                source_warehouse_id,
+                destination_warehouse_id
             FROM flights
             WHERE status IN ('planned_route', 'found')
             ORDER BY id DESC
@@ -108,7 +122,16 @@ class FlightRepository
             return null;
         }
 
-        $sql = "SELECT id, status, driver_id, planned_start_date_from, planned_start_date_to, actual_start_date, actual_end_date, cost, zayavki_ids, route_type, legal_entity_code, source_warehouse_id, destination_warehouse_id FROM flights WHERE id = ? LIMIT 1";
+        $directRequestsSelect = "'' AS direct_zayavki_ids";
+        try {
+            $columnStmt = $this->pdo->query("SHOW COLUMNS FROM flights LIKE 'direct_zayavki_ids'");
+            if ($columnStmt && $columnStmt->fetch(PDO::FETCH_ASSOC)) {
+                $directRequestsSelect = 'direct_zayavki_ids';
+            }
+        } catch (Throwable $e) {
+            // Совместимость до выполнения миграции.
+        }
+        $sql = "SELECT id, status, driver_id, planned_start_date_from, planned_start_date_to, actual_start_date, actual_end_date, cost, zayavki_ids, {$directRequestsSelect}, route_type, legal_entity_code, source_warehouse_id, destination_warehouse_id FROM flights WHERE id = ? LIMIT 1";
         try {
             $stmt = $this->pdo->prepare($sql);
             if (!$stmt) {

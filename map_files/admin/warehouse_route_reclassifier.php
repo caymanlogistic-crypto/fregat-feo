@@ -45,6 +45,7 @@ function whRouteTypeLabel(?string $rt): string {
         ROUTE_TYPE_GENERATOR_TO_WAREHOUSE => 'ОО → Временный склад',
         ROUTE_TYPE_WAREHOUSE_TO_WAREHOUSE => 'Склад → Склад',
         ROUTE_TYPE_WAREHOUSE_TO_UTILIZER => 'Склад → Утилизатор',
+        ROUTE_TYPE_MIXED_TO_UTILIZER => 'ОО + Склад → Утилизатор',
     ];
     return $map[$rt ?? ''] ?? ($rt ?? '—');
 }
@@ -60,7 +61,7 @@ function whStatusLabel(string $s): string {
 }
 
 function whUnloadTypeByRt(string $rt): string {
-    return ($rt === ROUTE_TYPE_GENERATOR_TO_UTILIZER || $rt === ROUTE_TYPE_WAREHOUSE_TO_UTILIZER) ? 'OO' : 'SKLAD';
+    return in_array($rt, [ROUTE_TYPE_GENERATOR_TO_UTILIZER, ROUTE_TYPE_WAREHOUSE_TO_UTILIZER, ROUTE_TYPE_MIXED_TO_UTILIZER], true) ? 'OO' : 'SKLAD';
 }
 
 function whLoadWarehouses(PDO $pdo): array {

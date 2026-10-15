@@ -111,6 +111,12 @@ function getWarehouseNamesForFlight(array $flight) {
             $loadingWarehouseName = $sourceWarehouseName;
             break;
 
+        case 'mixed_to_utilizer':
+            $loadingWarehouseName = $sourceWarehouseName !== ''
+                ? 'Прямой забор + ' . $sourceWarehouseName
+                : 'Прямой забор + склад';
+            break;
+
         case 'generator_to_utilizer':
         default:
             break;

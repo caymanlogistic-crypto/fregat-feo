@@ -9,6 +9,7 @@ function normalizeRouteType($routeTypeRaw, $unloadTypeRaw = 'OO'): string
         ROUTE_TYPE_GENERATOR_TO_WAREHOUSE,
         ROUTE_TYPE_WAREHOUSE_TO_WAREHOUSE,
         ROUTE_TYPE_WAREHOUSE_TO_UTILIZER,
+        ROUTE_TYPE_MIXED_TO_UTILIZER,
     ];
     if (in_array($routeType, $allowed, true)) {
         return $routeType;
@@ -31,11 +32,16 @@ if (!defined('ROUTE_TYPE_GENERATOR_TO_UTILIZER')) { define('ROUTE_TYPE_GENERATOR
 if (!defined('ROUTE_TYPE_GENERATOR_TO_WAREHOUSE')) { define('ROUTE_TYPE_GENERATOR_TO_WAREHOUSE', 'generator_to_warehouse'); }
 if (!defined('ROUTE_TYPE_WAREHOUSE_TO_WAREHOUSE')) { define('ROUTE_TYPE_WAREHOUSE_TO_WAREHOUSE', 'warehouse_to_warehouse'); }
 if (!defined('ROUTE_TYPE_WAREHOUSE_TO_UTILIZER')) { define('ROUTE_TYPE_WAREHOUSE_TO_UTILIZER', 'warehouse_to_utilizer'); }
+if (!defined('ROUTE_TYPE_MIXED_TO_UTILIZER')) { define('ROUTE_TYPE_MIXED_TO_UTILIZER', 'mixed_to_utilizer'); }
 
 if (!function_exists('resolveUnloadTypeByRouteType')) {
 function resolveUnloadTypeByRouteType(string $routeType): string
 {
-    return ($routeType === ROUTE_TYPE_GENERATOR_TO_UTILIZER || $routeType === ROUTE_TYPE_WAREHOUSE_TO_UTILIZER) ? 'OO' : 'SKLAD';
+    return in_array($routeType, [
+        ROUTE_TYPE_GENERATOR_TO_UTILIZER,
+        ROUTE_TYPE_WAREHOUSE_TO_UTILIZER,
+        ROUTE_TYPE_MIXED_TO_UTILIZER,
+    ], true) ? 'OO' : 'SKLAD';
 }
 }
 
@@ -111,6 +117,7 @@ function warehouseMoveTypeLabel(string $routeType): string
         ROUTE_TYPE_GENERATOR_TO_WAREHOUSE => 'ОО → Временный склад',
         ROUTE_TYPE_WAREHOUSE_TO_WAREHOUSE => 'Склад → Склад',
         ROUTE_TYPE_WAREHOUSE_TO_UTILIZER => 'Склад → Утилизатор',
+        ROUTE_TYPE_MIXED_TO_UTILIZER => 'ОО + Склад → Утилизатор',
     ];
     return $map[$routeType] ?? $routeType;
 }
@@ -203,8 +210,10 @@ function validateWarehouseRequirementsForCompleted(array $flight): ?string
             return 'Для маршрута "Склад → Склад" выберите склад назначения.';
         }
     }
-    if ($routeType === ROUTE_TYPE_WAREHOUSE_TO_UTILIZER && $sourceId <= 0) {
-        return 'Для маршрута "Склад → Утилизатор" выберите склад отправления.';
+    if (in_array($routeType, [ROUTE_TYPE_WAREHOUSE_TO_UTILIZER, ROUTE_TYPE_MIXED_TO_UTILIZER], true) && $sourceId <= 0) {
+        return $routeType === ROUTE_TYPE_MIXED_TO_UTILIZER
+            ? 'Для смешанного маршрута выберите склад дозагрузки.'
+            : 'Для маршрута "Склад → Утилизатор" выберите склад отправления.';
     }
     return null;
 }
@@ -230,7 +239,7 @@ function createWarehouseMovementsForFlightEvent(PDO $pdo, int $flightId, string 
     ];
 
     try {
-        $stmt = $pdo->prepare('SELECT id, status, route_type, unload_type, source_warehouse_id, destination_warehouse_id, zayavki_ids, actual_start_date, actual_end_date FROM flights WHERE id = :id LIMIT 1');
+        $stmt = $pdo->prepare('SELECT id, status, route_type, unload_type, source_warehouse_id, destination_warehouse_id, zayavki_ids, direct_zayavki_ids, actual_start_date, actual_end_date FROM flights WHERE id = :id LIMIT 1');
         $stmt->execute([':id' => $flightId]);
         $flight = $stmt->fetch(PDO::FETCH_ASSOC);
         if (!is_array($flight)) {
@@ -286,6 +295,40 @@ function createWarehouseMovementsForFlightEvent(PDO $pdo, int $flightId, string 
         return $result;
     }
 
+    $directZayavkiIds = [];
+    if ($routeType === ROUTE_TYPE_MIXED_TO_UTILIZER) {
+        $allIdsMap = array_fill_keys($zayavkiIds, true);
+        $outsideDirectIds = [];
+        foreach (explode(',', (string)($flight['direct_zayavki_ids'] ?? '')) as $id) {
+            $id = (int)trim($id);
+            if ($id <= 0) {
+                continue;
+            }
+            if (!isset($allIdsMap[$id])) {
+                $outsideDirectIds[$id] = $id;
+                continue;
+            }
+            $directZayavkiIds[$id] = $id;
+        }
+        $directZayavkiIds = array_values($directZayavkiIds);
+        if ($outsideDirectIds) {
+            $result['success'] = false;
+            $result['errors'][] = 'Прямые заявки не входят в рейс: ' . implode(', ', array_values($outsideDirectIds)) . '.';
+            return $result;
+        }
+        $warehouseZayavkiIds = array_values(array_diff($zayavkiIds, $directZayavkiIds));
+        $result['direct_requests'] = $directZayavkiIds;
+        $result['warehouse_requests'] = $warehouseZayavkiIds;
+        if (empty($directZayavkiIds) || empty($warehouseZayavkiIds)) {
+            $result['success'] = false;
+            $result['errors'][] = 'Для смешанного рейса нужны заявки двух групп: уже в машине и со склада.';
+            return $result;
+        }
+        // Прямые заявки уже находятся в машине. Складские движения создаются
+        // только для второй группы — заявок, которыми машина дозагружается.
+        $zayavkiIds = $warehouseZayavkiIds;
+    }
+
     $feoRows = [];
     try {
         $placeholders = implode(',', array_fill(0, count($zayavkiIds), '?'));
@@ -310,7 +353,7 @@ function createWarehouseMovementsForFlightEvent(PDO $pdo, int $flightId, string 
 
     // ── Для складских маршрутов с source_warehouse: проверяем, есть ли заявка на складе ──
     $availableOnSource = [];
-    if (($routeType === ROUTE_TYPE_WAREHOUSE_TO_UTILIZER || $routeType === ROUTE_TYPE_WAREHOUSE_TO_WAREHOUSE)
+    if (in_array($routeType, [ROUTE_TYPE_WAREHOUSE_TO_UTILIZER, ROUTE_TYPE_WAREHOUSE_TO_WAREHOUSE, ROUTE_TYPE_MIXED_TO_UTILIZER], true)
         && $sourceWarehouseId > 0 && !empty($zayavkiIds)
     ) {
         $availableOnSource = getWarehouseAvailableZayavki($pdo, $sourceWarehouseId, $zayavkiIds);
@@ -410,7 +453,7 @@ function createWarehouseMovementsForFlightEvent(PDO $pdo, int $flightId, string 
             } else {
                 $result['skipped']++;
             }
-        } elseif ($routeType === ROUTE_TYPE_WAREHOUSE_TO_UTILIZER) {
+        } elseif (in_array($routeType, [ROUTE_TYPE_WAREHOUSE_TO_UTILIZER, ROUTE_TYPE_MIXED_TO_UTILIZER], true)) {
             $issueExists = wmMovementExists($pdo, $flightId, WM_MOVEMENT_ISSUE, $sourceWarehouseId, $zayavkaId);
             if ($issueExists) {
                 if ($event === 'started') {
