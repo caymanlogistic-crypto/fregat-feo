@@ -68,13 +68,6 @@ $t = static function (string $key, string $fallback): string {
         </div>
     </div>
 
-    <div class="layer-group" style="border-bottom: none; margin-bottom: 4px; padding-bottom: 0;">
-        <div class="checkbox-item">
-            <input type="checkbox" id="request_deadline_highlight" onchange="toggleRequestDeadlineHighlight(this.checked)">
-            <label for="request_deadline_highlight"><?= $t('layers.requests.deadline_control', 'Контроль срока вывоза') ?></label>
-        </div>
-    </div>
-
     <div class="layer-group" style="border-bottom: none; margin-bottom: 0; padding-bottom: 0;"><div class="checkbox-item" style="background: #fff3cd; border: 1px solid #ffc107;"><input type="checkbox" id="disable-popups" checked onchange="togglePopups(this.checked)"><label for="disable-popups"><?= $t('layers.popups.disable', 'Не показывать попапы') ?></label></div></div>
 </div>
 

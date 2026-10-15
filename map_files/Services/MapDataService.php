@@ -25,6 +25,7 @@ class MapDataService
     {
         $flightStatuses = $this->getActualStatuses();
         $availableZayavki = $this->getAvailableZayavkiIds();
+        $overdueZayavki = $this->getOverdueZayavkiIds();
         $utilizerIndexes = $this->buildUtilizerIndexes();
         $points = $this->feoRepository->fetchPointsWithCoords();
         if (!is_array($points)) {
@@ -52,6 +53,7 @@ class MapDataService
             $point['gruzopoluchatel'] = mapNormalizeText((string)($point['gruzopoluchatel'] ?? ''));
             $point['adres_dostavki_otkhodov'] = mapNormalizeText((string)($point['adres_dostavki_otkhodov'] ?? ''));
             $point['data_sozdaniya_porucheniya'] = trim((string)($point['data_sozdaniya_porucheniya'] ?? ''));
+            $point['is_overdue'] = isset($overdueZayavki[$zayavkaId]);
 
             $utilizer = $this->resolveUtilizerForPoint($point, $utilizerIndexes);
             $point['utilizer_id'] = $utilizer['id'];
@@ -376,5 +378,33 @@ class MapDataService
         }
 
         return $available;
+    }
+
+    private function getOverdueZayavkiIds()
+    {
+        if (!method_exists($this->statusBlockRepository, 'fetchOverdueBlocks')) {
+            return [];
+        }
+
+        $rows = $this->statusBlockRepository->fetchOverdueBlocks();
+        if (!is_array($rows)) {
+            return [];
+        }
+
+        $overdue = [];
+        foreach ($rows as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+            $ids = preg_split('/[,;\s]+/', (string)($row['zayavki_ids'] ?? ''), -1, PREG_SPLIT_NO_EMPTY);
+            foreach ((array)$ids as $id) {
+                $id = trim((string)$id);
+                if ($id !== '' && preg_match('/^\d+$/', $id)) {
+                    $overdue[$id] = true;
+                }
+            }
+        }
+
+        return $overdue;
     }
 }

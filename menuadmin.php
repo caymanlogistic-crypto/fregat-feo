@@ -139,6 +139,11 @@
                 Статусы заявок
             </a>
         </li>
+			<li class="menu-item">
+            <a href="overdue.php" class="menu-link <?= basename($_SERVER['PHP_SELF']) == 'overdue.php' ? 'active' : '' ?>">
+                Просроченные заявки
+            </a>
+        </li>
 		        </li>
 			<li class="menu-item">
             <a href="users.php" class="menu-link <?= basename($_SERVER['PHP_SELF']) == 'users.php' ? 'active' : '' ?>">

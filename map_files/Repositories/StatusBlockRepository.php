@@ -98,4 +98,26 @@ class StatusBlockRepository
             return [];
         }
     }
+
+    public function fetchOverdueBlocks()
+    {
+        try {
+            $table = $this->pdo->query("SHOW TABLES LIKE 'overdue_blocks'");
+            if (!$table || !$table->fetchColumn()) {
+                return [];
+            }
+
+            $stmt = $this->pdo->query("SELECT id, name, zayavki_count, total_mass_tonn, zayavki_ids, created_at FROM overdue_blocks ORDER BY id ASC");
+            if (!$stmt) {
+                mapError('StatusBlockRepository overdue query returned false');
+                return [];
+            }
+
+            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            return is_array($rows) ? $rows : [];
+        } catch (Throwable $e) {
+            mapError('StatusBlockRepository overdue query failed', ['error' => $e->getMessage()]);
+            return [];
+        }
+    }
 }

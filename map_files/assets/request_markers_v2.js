@@ -12,20 +12,10 @@
     const DEFAULT_UTILIZER_MAIN = '#6c757d';
     const DEFAULT_UTILIZER_TEXT = '#ffffff';
     const DEFAULT_PRE_FLIGHT_STROKE = '#000000';
-    const REQUEST_DEADLINE_DAYS = 60;
-    const REQUEST_DEADLINE_WARNING_DAYS = 10;
     const REQUEST_DEADLINE_STROKE = '#dc3545';
     const REQUEST_DEADLINE_GLOW = '#ff2d2d';
-    const REQUEST_DEADLINE_EXCLUDED_FLIGHT_STATUSES = new Set(['found', 'started', 'completed']);
-    const DAY_MS = 24 * 60 * 60 * 1000;
     const dangerousUtilizerMap = Object.create(null);
     const availableUtilizerFilters = Object.create(null);
-    let requestDeadlineHighlightEnabled = false;
-    let deadlineStateCache = {
-        dateKey: '',
-        groupsRef: null,
-        byCoord: Object.create(null)
-    };
 
     function validHex(value, fallback) {
         const color = String(value || '').trim();
@@ -83,116 +73,10 @@
         return validHex(group.marker_color, DEFAULT_PRE_FLIGHT_STROKE);
     }
 
-    function currentLocalDateParts() {
-        const now = new Date();
-        return {
-            year: now.getFullYear(),
-            month: now.getMonth() + 1,
-            day: now.getDate()
-        };
-    }
-
-    function currentLocalDateKey() {
-        const parts = currentLocalDateParts();
-        return [
-            String(parts.year).padStart(4, '0'),
-            String(parts.month).padStart(2, '0'),
-            String(parts.day).padStart(2, '0')
-        ].join('-');
-    }
-
-    function currentLocalDayUtc() {
-        const parts = currentLocalDateParts();
-        return Date.UTC(parts.year, parts.month - 1, parts.day);
-    }
-
-    function parseYmdToUtcDay(value) {
-        const match = String(value || '').trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
-        if (!match) return null;
-        const year = Number(match[1]);
-        const month = Number(match[2]);
-        const day = Number(match[3]);
-        const utcDay = Date.UTC(year, month - 1, day);
-        const check = new Date(utcDay);
-        if (
-            check.getUTCFullYear() !== year ||
-            check.getUTCMonth() !== month - 1 ||
-            check.getUTCDate() !== day
-        ) {
-            return null;
-        }
-        return utcDay;
-    }
-
-    function deadlineStateForCreationDate(value, todayUtcDay) {
-        const createdUtcDay = parseYmdToUtcDay(value);
-        if (createdUtcDay === null) return 0;
-        const dueUtcDay = createdUtcDay + REQUEST_DEADLINE_DAYS * DAY_MS;
-        const remainingDays = Math.round((dueUtcDay - todayUtcDay) / DAY_MS);
-        if (remainingDays < 0) return 2;
-        if (remainingDays <= REQUEST_DEADLINE_WARNING_DAYS) return 1;
-        return 0;
-    }
-
-    function deadlineCoordKey(group) {
-        if (!group) return '';
-        return `${group.mno_sh}|${group.mno_d}`;
-    }
-
-    function isDeadlineEligibleGroup(group) {
-        if (!group) return false;
-        if (!group.in_flight) return true;
-        const flightStatus = String(group.flight_status || '').trim();
-        return !REQUEST_DEADLINE_EXCLUDED_FLIGHT_STATUSES.has(flightStatus);
-    }
-
-    function buildDeadlineStateByCoord() {
-        if (typeof groupsData === 'undefined' || !Array.isArray(groupsData)) {
-            return Object.create(null);
-        }
-
-        const dateKey = currentLocalDateKey();
-        if (deadlineStateCache.dateKey === dateKey && deadlineStateCache.groupsRef === groupsData) {
-            return deadlineStateCache.byCoord;
-        }
-
-        const todayUtcDay = currentLocalDayUtc();
-        const byCoord = Object.create(null);
-        groupsData.forEach(group => {
-            if (!group || !Array.isArray(group.points) || !isDeadlineEligibleGroup(group)) return;
-            const coordKey = deadlineCoordKey(group);
-            if (!coordKey) return;
-            let state = Number(byCoord[coordKey] || 0);
-            group.points.forEach(point => {
-                if (!point || state >= 2) return;
-                const pointState = deadlineStateForCreationDate(point.data_sozdaniya_porucheniya, todayUtcDay);
-                if (pointState > state) state = pointState;
-            });
-            if (state > Number(byCoord[coordKey] || 0)) byCoord[coordKey] = state;
-        });
-
-        deadlineStateCache = {
-            dateKey,
-            groupsRef: groupsData,
-            byCoord
-        };
-        return byCoord;
-    }
-
     function deadlineStateForGroup(group) {
-        if (!requestDeadlineHighlightEnabled || !group || !isDeadlineEligibleGroup(group)) return 0;
-        const byCoord = buildDeadlineStateByCoord();
-        return Number(byCoord[deadlineCoordKey(group)] || 0);
+        if (!group || !Array.isArray(group.points)) return 0;
+        return group.points.some(point => point && point.is_overdue === true) ? 2 : 0;
     }
-
-    window.toggleRequestDeadlineHighlight = function (enabled) {
-        requestDeadlineHighlightEnabled = !!enabled;
-        if (typeof updateMap === 'function') {
-            updateMap();
-        } else if (typeof refreshMarkerStyles === 'function') {
-            refreshMarkerStyles();
-        }
-    };
 
     function buildAvailableUtilizerFilters() {
         if (typeof document === 'undefined' || !Array.isArray(groupsData)) return false;
