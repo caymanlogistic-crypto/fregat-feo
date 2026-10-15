@@ -90,7 +90,8 @@ foreach (explode(',', (string)($flight['direct_zayavki_ids'] ?? '')) as $id) {
     $id = (int)trim($id);
     if ($id > 0) $directZayavkiIds[$id] = $id;
 }
-$warehouseZayavkiIdsCount = count(array_diff($zayavkiIds, array_values($directZayavkiIds)));
+$warehouseZayavkiIds = array_values(array_diff($zayavkiIds, array_values($directZayavkiIds)));
+$warehouseZayavkiIdsCount = count($warehouseZayavkiIds);
 
 $routeType = strtolower(safeStr($flight['route_type'] ?? ''));
 $status = safeStr($flight['status'] ?? '');
