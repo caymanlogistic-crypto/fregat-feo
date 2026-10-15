@@ -364,6 +364,27 @@ ssh ... "cd /home/s/spugovxsim/public_html/fregat/feo && git pull"
 - `warehouse_to_utilizer` — `issue`;
 - `mixed_to_utilizer` — `issue` только для складской группы; для прямой группы движений нет.
 
+Миграция смешанных рейсов сначала запускается без записи:
+
+```bash
+/usr/bin/php8.4 map_files/tools/migrate_mixed_route_support.php
+```
+
+Запись разрешена только после проверки dry-run и создаёт внешний JSON-бэкап с SHA256:
+
+```bash
+/usr/bin/php8.4 map_files/tools/migrate_mixed_route_support.php --apply
+```
+
+Откат также сначала выполняется в dry-run. Обычный `--apply` восстанавливает только поля рейсов;
+`--restore-movements` дополнительно возвращает складские движения из снимка:
+
+```bash
+/usr/bin/php8.4 map_files/tools/rollback_mixed_route_support.php <backup.json>
+/usr/bin/php8.4 map_files/tools/rollback_mixed_route_support.php <backup.json> --apply
+/usr/bin/php8.4 map_files/tools/rollback_mixed_route_support.php <backup.json> --apply --restore-movements
+```
+
 PASS по складской логике можно ставить только после фактического `SELECT` из `warehouse_movements`.
 
 Нельзя писать:

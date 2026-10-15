@@ -14,6 +14,58 @@ if (!isset($pdo) || !($pdo instanceof PDO)) {
     exit(1);
 }
 
+function mixedMigrationTableExists(PDO $pdo, string $table): bool
+{
+    $stmt = $pdo->prepare('SHOW TABLES LIKE ?');
+    return $stmt && $stmt->execute([$table]) && (bool)$stmt->fetchColumn();
+}
+
+function mixedMigrationWriteBackup(string $directory, array $payload): array
+{
+    if (!is_dir($directory) && !mkdir($directory, 0700, true) && !is_dir($directory)) {
+        throw new RuntimeException('Cannot create backup directory.');
+    }
+    @chmod($directory, 0700);
+
+    $json = json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    if (!is_string($json)) {
+        throw new RuntimeException('Cannot encode backup.');
+    }
+
+    $suffix = bin2hex(random_bytes(4));
+    $path = $directory . DIRECTORY_SEPARATOR . 'mixed_route_before_' . gmdate('Ymd_His') . '_' . $suffix . '.json';
+    $temporaryPath = $path . '.tmp';
+    if (file_put_contents($temporaryPath, $json . "\n", LOCK_EX) === false) {
+        throw new RuntimeException('Cannot write backup.');
+    }
+    @chmod($temporaryPath, 0600);
+    if (!rename($temporaryPath, $path)) {
+        @unlink($temporaryPath);
+        throw new RuntimeException('Cannot finalize backup.');
+    }
+    @chmod($path, 0600);
+
+    $hash = hash_file('sha256', $path);
+    if (!is_string($hash) || $hash === '') {
+        throw new RuntimeException('Cannot calculate backup checksum.');
+    }
+    $checksumPath = $path . '.sha256';
+    if (file_put_contents($checksumPath, $hash . '  ' . basename($path) . "\n", LOCK_EX) === false) {
+        throw new RuntimeException('Cannot write backup checksum.');
+    }
+    @chmod($checksumPath, 0600);
+
+    return [$path, $hash];
+}
+
+$arguments = array_slice($argv, 1);
+$apply = in_array('--apply', $arguments, true);
+$unknownArguments = array_values(array_diff($arguments, ['--apply']));
+if ($unknownArguments) {
+    fwrite(STDERR, 'Unknown arguments: ' . implode(', ', $unknownArguments) . PHP_EOL);
+    exit(1);
+}
+
 // Из старых завершённых рейсов в новый формат переводится только #269.
 // #351 и #353 — текущие рейсы, ради которых добавлена смешанная схема.
 $targets = [
@@ -50,23 +102,58 @@ foreach ($beforeRows as $row) {
         fwrite(STDERR, "Migration stopped: flight #{$flightId} has no source warehouse.\n");
         exit(1);
     }
+    echo "Checked flight #{$flightId}: direct requests " . implode(',', $targets[$flightId]) . ".\n";
 }
 
-$backupDir = __DIR__ . '/backups';
-if (!is_dir($backupDir) && !mkdir($backupDir, 0770, true) && !is_dir($backupDir)) {
-    fwrite(STDERR, "Migration stopped: cannot create backup directory.\n");
+if (!$apply) {
+    echo "DRY RUN complete. No data changed. Run again with --apply to create a backup and apply the migration.\n";
+    exit(0);
+}
+
+$warehouseMovementsTableExists = mixedMigrationTableExists($pdo, 'warehouse_movements');
+$warehouseMovementRows = [];
+if ($warehouseMovementsTableExists) {
+    $movementStmt = $pdo->prepare("SELECT * FROM warehouse_movements WHERE flight_id IN ({$placeholders}) ORDER BY id");
+    $movementStmt->execute($flightIds);
+    $warehouseMovementRows = $movementStmt->fetchAll(PDO::FETCH_ASSOC);
+}
+
+$schemaStmt = $pdo->query('SHOW CREATE TABLE flights');
+$schemaRow = $schemaStmt ? ($schemaStmt->fetch(PDO::FETCH_ASSOC) ?: null) : null;
+$userHomeDirectory = getenv('HOME');
+if (!is_string($userHomeDirectory) || $userHomeDirectory === '') {
+    $userHomeDirectory = getenv('USERPROFILE');
+}
+if (!is_string($userHomeDirectory) || $userHomeDirectory === '') {
+    fwrite(STDERR, "Migration stopped: user home directory is unavailable.\n");
     exit(1);
 }
-$backupPath = $backupDir . '/mixed_route_' . date('Ymd_His') . '.json';
+
 $backupPayload = [
-    'created_at' => date(DATE_ATOM),
+    'format_version' => 1,
+    'created_at' => gmdate('c'),
+    'purpose' => 'Before mixed route migration for flights 269, 351 and 353',
+    'database' => (string)$pdo->query('SELECT DATABASE()')->fetchColumn(),
+    'direct_zayavki_column_existed_before' => (bool)$columnExists,
+    'flights_schema' => $schemaRow,
+    'targets' => $targets,
     'flights' => $beforeRows,
+    'warehouse_movements_table_existed' => $warehouseMovementsTableExists,
+    'warehouse_movements' => $warehouseMovementRows,
 ];
-if (file_put_contents($backupPath, json_encode($backupPayload, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) === false) {
-    fwrite(STDERR, "Migration stopped: cannot write backup.\n");
+
+try {
+    [$backupPath, $backupHash] = mixedMigrationWriteBackup(
+        rtrim($userHomeDirectory, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . 'fregat-feo-backups',
+        $backupPayload
+    );
+} catch (Throwable $e) {
+    fwrite(STDERR, 'Migration stopped before changes: ' . $e->getMessage() . PHP_EOL);
     exit(1);
 }
 echo "Backup: {$backupPath}\n";
+echo "SHA256: {$backupHash}\n";
+echo 'Backed up warehouse movements: ' . count($warehouseMovementRows) . PHP_EOL;
 
 if (!$columnExists) {
     $pdo->exec("ALTER TABLE flights ADD COLUMN direct_zayavki_ids TEXT NULL DEFAULT NULL AFTER zayavki_ids");
@@ -88,22 +175,39 @@ try {
             ':direct_ids' => implode(',', $directIds),
             ':id' => $flightId,
         ]);
-        echo "Updated flight #{$flightId}: direct requests " . implode(',', $directIds) . ".\n";
+        if ($update->rowCount() > 1) {
+            throw new RuntimeException("Unexpected update count for flight #{$flightId}.");
+        }
     }
+
+    $verify = $pdo->prepare(
+        "SELECT id, status, route_type, unload_type, source_warehouse_id, zayavki_ids, direct_zayavki_ids
+         FROM flights
+         WHERE id IN ({$placeholders})
+         ORDER BY id"
+    );
+    $verify->execute($flightIds);
+    $afterRows = $verify->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($afterRows as $row) {
+        $flightId = (int)$row['id'];
+        if (($row['route_type'] ?? '') !== 'mixed_to_utilizer'
+            || ($row['unload_type'] ?? '') !== 'OO'
+            || (string)($row['direct_zayavki_ids'] ?? '') !== implode(',', $targets[$flightId])) {
+            throw new RuntimeException("Verification failed for flight #{$flightId}.");
+        }
+    }
+    if (count($afterRows) !== count($targets)) {
+        throw new RuntimeException('Verification returned an unexpected number of flights.');
+    }
+
     $pdo->commit();
 } catch (Throwable $e) {
     if ($pdo->inTransaction()) {
         $pdo->rollBack();
     }
     fwrite(STDERR, 'Migration failed: ' . $e->getMessage() . PHP_EOL);
+    fwrite(STDERR, "Backup for recovery: {$backupPath}\n");
     exit(1);
 }
 
-$verify = $pdo->prepare(
-    "SELECT id, status, route_type, unload_type, source_warehouse_id, zayavki_ids, direct_zayavki_ids
-     FROM flights
-     WHERE id IN ({$placeholders})
-     ORDER BY id"
-);
-$verify->execute($flightIds);
-echo 'SELECT verification: ' . json_encode($verify->fetchAll(PDO::FETCH_ASSOC), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . PHP_EOL;
+echo 'Migration applied and verified: ' . json_encode($afterRows, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . PHP_EOL;
