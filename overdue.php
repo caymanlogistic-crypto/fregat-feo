@@ -195,6 +195,7 @@ function overdueH(string $value): string
         .overdue-field label { display: block; margin-bottom: 6px; font-weight: 700; }
         .overdue-field input, .overdue-field textarea { box-sizing: border-box; width: 100%; padding: 10px; border: 1px solid #b9c1cc; border-radius: 6px; font: inherit; }
         .overdue-field textarea { min-height: 108px; resize: vertical; }
+        .overdue-field textarea:disabled { background: #eef1f5; color: #7b8491; cursor: not-allowed; }
         .overdue-actions { display: flex; gap: 8px; margin-top: 14px; align-items: center; }
         .overdue-table-wrap { overflow-x: auto; }
         .overdue-table { width: 100%; border-collapse: collapse; }
@@ -205,6 +206,11 @@ function overdueH(string $value): string
         .overdue-alert.error { background: #f8d7da; color: #721c24; border: 1px solid #f1aeb5; }
         .overdue-alert.success { background: #d1e7dd; color: #0f5132; border: 1px solid #a3cfbb; }
         .overdue-note { color: #586174; font-size: 13px; margin-top: 6px; }
+        .overdue-live-status { display: none; margin-top: 9px; border-radius: 6px; padding: 9px 11px; font-size: 13px; line-height: 1.45; }
+        .overdue-live-status.is-visible { display: block; }
+        .overdue-live-status.warning { color: #7a3e00; background: #fff3cd; border: 1px solid #ffda6a; }
+        .overdue-live-status.error { color: #842029; background: #f8d7da; border: 1px solid #f1aeb5; }
+        .overdue-live-status.success { color: #0f5132; background: #d1e7dd; border: 1px solid #a3cfbb; }
         .overdue-inline { display: inline; }
         @media (max-width: 760px) { .overdue-grid { grid-template-columns: 1fr; } }
     </style>
@@ -250,8 +256,9 @@ function overdueH(string $value): string
                 </div>
                 <div class="overdue-field">
                     <label for="zayavki_ids">Источник — заявки</label>
-                    <textarea id="zayavki_ids" name="zayavki_ids" required placeholder="249071, 251448, 253319"><?= overdueH((string)($editBlock['zayavki_ids'] ?? '')) ?></textarea>
-                    <div class="overdue-note">Можно вводить через запятую, пробел или с новой строки.</div>
+                    <textarea id="zayavki_ids" name="zayavki_ids" required placeholder="249071, 251448, 253319"<?= empty($editBlock['collect_by_date']) ? ' disabled' : '' ?>><?= overdueH((string)($editBlock['zayavki_ids'] ?? '')) ?></textarea>
+                    <div id="zayavki_ids_note" class="overdue-note">Сначала укажите дату «Собрать до». Затем можно вводить заявки через запятую, пробел или с новой строки.</div>
+                    <div id="overdue_live_status" class="overdue-live-status" role="status" aria-live="polite"></div>
                 </div>
             </div>
             <div class="overdue-actions">
@@ -297,5 +304,124 @@ function overdueH(string $value): string
         </div>
     </section>
 </main>
+<?php if ($tableExists && $collectDateColumnExists): ?>
+<script>
+(function () {
+    'use strict';
+
+    const dateInput = document.getElementById('collect_by_date');
+    const idsInput = document.getElementById('zayavki_ids');
+    const note = document.getElementById('zayavki_ids_note');
+    const status = document.getElementById('overdue_live_status');
+    const tokenInput = document.querySelector('input[name="form_token"]');
+    const blockInput = document.querySelector('input[name="block_id"]');
+    let requestNo = 0;
+    let debounceTimer = null;
+    let activeController = null;
+
+    function setStatus(kind, messages) {
+        status.className = 'overdue-live-status';
+        status.textContent = '';
+        if (!messages.length) return;
+        status.classList.add('is-visible', kind);
+        messages.forEach(function (message) {
+            const line = document.createElement('div');
+            line.textContent = message;
+            status.appendChild(line);
+        });
+    }
+
+    function syncDateGate() {
+        const enabled = dateInput.value !== '';
+        idsInput.disabled = !enabled;
+        note.textContent = enabled
+            ? 'Можно вводить через запятую, пробел или с новой строки. Проверка выполняется сразу.'
+            : 'Сначала укажите дату «Собрать до». Затем можно вводить заявки через запятую, пробел или с новой строки.';
+        if (!enabled) setStatus('', []);
+    }
+
+    function parseInput() {
+        const valid = [];
+        const invalid = [];
+        const seen = Object.create(null);
+        String(idsInput.value || '').split(/[,;\s]+/).filter(Boolean).forEach(function (token) {
+            if (!/^\d+$/.test(token)) {
+                invalid.push(token);
+                return;
+            }
+            if (!seen[token]) {
+                seen[token] = true;
+                valid.push(token);
+            }
+        });
+        return { valid: valid, invalid: invalid };
+    }
+
+    async function validateIds() {
+        const parsed = parseInput();
+        const localWarnings = parsed.invalid.length
+            ? ['Не добавлены некорректные значения: ' + parsed.invalid.join(', ')]
+            : [];
+        if (!parsed.valid.length) {
+            idsInput.value = '';
+            setStatus(localWarnings.length ? 'warning' : '', localWarnings);
+            return;
+        }
+
+        const currentRequest = ++requestNo;
+        if (activeController) activeController.abort();
+        activeController = new AbortController();
+        const body = new URLSearchParams();
+        body.set('form_token', tokenInput ? tokenInput.value : '');
+        body.set('block_id', blockInput ? blockInput.value : '0');
+        body.set('zayavki_ids', parsed.valid.join(','));
+
+        try {
+            const response = await fetch('overdue_validate.php', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+                body: body.toString(),
+                signal: activeController.signal,
+                cache: 'no-store'
+            });
+            const data = await response.json();
+            if (currentRequest !== requestNo) return;
+            if (!response.ok || !data || data.success !== true) {
+                throw new Error(data && data.message ? data.message : 'Не удалось проверить заявки.');
+            }
+
+            idsInput.value = data.valid_ids.join(', ');
+            const messages = localWarnings.slice();
+            (data.duplicates || []).forEach(function (item) {
+                const blocks = item.blocks.map(function (block) {
+                    return '№' + block.id + ' «' + block.name + '»';
+                }).join(', ');
+                messages.push('Заявка ' + item.id + ' не добавлена: уже находится в блоке ' + blocks + '.');
+            });
+            if (data.missing_ids.length) {
+                messages.push('Не найдены в БД и не добавлены: ' + data.missing_ids.join(', ') + '.');
+            }
+            setStatus(messages.length ? 'warning' : 'success', messages.length ? messages : ['Все заявки найдены и доступны для добавления.']);
+        } catch (error) {
+            if (error && error.name === 'AbortError') return;
+            setStatus('error', [error && error.message ? error.message : 'Не удалось проверить заявки.']);
+        }
+    }
+
+    function scheduleValidation(delay) {
+        window.clearTimeout(debounceTimer);
+        debounceTimer = window.setTimeout(validateIds, delay);
+    }
+
+    dateInput.addEventListener('change', function () {
+        syncDateGate();
+        if (!idsInput.disabled && idsInput.value.trim() !== '') scheduleValidation(0);
+    });
+    idsInput.addEventListener('input', function () { scheduleValidation(250); });
+    idsInput.addEventListener('paste', function () { scheduleValidation(0); });
+    syncDateGate();
+}());
+</script>
+<?php endif; ?>
 </body>
 </html>

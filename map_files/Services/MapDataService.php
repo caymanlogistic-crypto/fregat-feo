@@ -53,7 +53,11 @@ class MapDataService
             $point['gruzopoluchatel'] = mapNormalizeText((string)($point['gruzopoluchatel'] ?? ''));
             $point['adres_dostavki_otkhodov'] = mapNormalizeText((string)($point['adres_dostavki_otkhodov'] ?? ''));
             $point['data_sozdaniya_porucheniya'] = trim((string)($point['data_sozdaniya_porucheniya'] ?? ''));
-            $point['is_overdue'] = isset($overdueZayavki[$zayavkaId]);
+            $overdueData = isset($overdueZayavki[$zayavkaId]) && is_array($overdueZayavki[$zayavkaId])
+                ? $overdueZayavki[$zayavkaId]
+                : null;
+            $point['is_overdue'] = $overdueData !== null;
+            $point['is_overdue_urgent'] = $overdueData !== null && !empty($overdueData['is_urgent']);
 
             $utilizer = $this->resolveUtilizerForPoint($point, $utilizerIndexes);
             $point['utilizer_id'] = $utilizer['id'];
@@ -392,15 +396,33 @@ class MapDataService
         }
 
         $overdue = [];
+        $timeZone = new DateTimeZone('Europe/Moscow');
+        $today = new DateTimeImmutable('today', $timeZone);
         foreach ($rows as $row) {
             if (!is_array($row)) {
                 continue;
             }
+            $collectByDate = trim((string)($row['collect_by_date'] ?? ''));
+            $deadline = DateTimeImmutable::createFromFormat('!Y-m-d', $collectByDate, $timeZone);
+            $dateErrors = DateTimeImmutable::getLastErrors();
+            $hasValidDeadline = $deadline !== false
+                && ($dateErrors === false || ((int)$dateErrors['warning_count'] === 0 && (int)$dateErrors['error_count'] === 0))
+                && $deadline->format('Y-m-d') === $collectByDate;
+            $daysRemaining = $hasValidDeadline ? (int)$today->diff($deadline)->format('%r%a') : null;
+            $isUrgent = $daysRemaining !== null && $daysRemaining <= 8;
+
             $ids = preg_split('/[,;\s]+/', (string)($row['zayavki_ids'] ?? ''), -1, PREG_SPLIT_NO_EMPTY);
             foreach ((array)$ids as $id) {
                 $id = trim((string)$id);
                 if ($id !== '' && preg_match('/^\d+$/', $id)) {
-                    $overdue[$id] = true;
+                    if (!isset($overdue[$id])) {
+                        $overdue[$id] = [
+                            'is_urgent' => $isUrgent,
+                            'collect_by_date' => $hasValidDeadline ? $collectByDate : null,
+                        ];
+                    } elseif ($isUrgent) {
+                        $overdue[$id]['is_urgent'] = true;
+                    }
                 }
             }
         }

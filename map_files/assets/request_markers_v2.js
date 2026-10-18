@@ -14,6 +14,7 @@
     const DEFAULT_PRE_FLIGHT_STROKE = '#000000';
     const REQUEST_DEADLINE_STROKE = '#dc3545';
     const REQUEST_DEADLINE_GLOW = '#ff2d2d';
+    const REQUEST_DEADLINE_URGENT_FILL = '#dc3545';
     const dangerousUtilizerMap = Object.create(null);
     const availableUtilizerFilters = Object.create(null);
 
@@ -75,7 +76,8 @@
 
     function deadlineStateForGroup(group) {
         if (!group || !Array.isArray(group.points)) return 0;
-        return group.points.some(point => point && point.is_overdue === true) ? 2 : 0;
+        if (group.points.some(point => point && point.is_overdue_urgent === true)) return 2;
+        return group.points.some(point => point && point.is_overdue === true) ? 1 : 0;
     }
 
     function buildAvailableUtilizerFilters() {
@@ -195,12 +197,12 @@
         const statusColor = validHex(markerColor, DEFAULT_PRE_FLIGHT_STROKE);
         const normalizedDeadlineState = Number(deadlineState || 0);
         const deadlineWarning = normalizedDeadlineState >= 1;
-        const deadlineOverdue = normalizedDeadlineState >= 2;
+        const deadlineUrgent = normalizedDeadlineState >= 2;
         const strokeColor = isSelected ? '#1f73ff' : (deadlineWarning ? REQUEST_DEADLINE_STROKE : statusColor);
         const dividerColor = isSelected ? '#1f73ff' : statusColor;
-        const glowColor = isSelected ? '#1976ff' : (deadlineOverdue ? REQUEST_DEADLINE_GLOW : '');
-        const fillColor = markerBackground(weightInKg, isSelected);
-        const weightTextColor = isSelected ? '#174ea6' : '#000000';
+        const glowColor = isSelected ? '#1976ff' : (deadlineWarning ? REQUEST_DEADLINE_GLOW : '');
+        const fillColor = deadlineUrgent ? REQUEST_DEADLINE_URGENT_FILL : markerBackground(weightInKg, isSelected);
+        const weightTextColor = deadlineUrgent ? '#ffffff' : (isSelected ? '#174ea6' : '#000000');
         const strokeWidth = isSelected ? 2.6 : 2;
         const ribbonColor = validHex(utilizerMain, DEFAULT_UTILIZER_MAIN);
         const ribbonTextColor = validHex(utilizerText, DEFAULT_UTILIZER_TEXT);
@@ -248,7 +250,7 @@
         const effectiveMarkerColor = markerStrokeColorForGroup(group);
         const deadlineState = deadlineStateForGroup(group);
         const cacheKey = [
-            'v2-deadline-outline-glow', group.total_mass, effectiveMarkerColor, group.flight_id || '', hideTriangle ? 1 : 0, isSelected ? 1 : 0, dangerous ? 1 : 0, deadlineState,
+            'v2-deadline-urgent-fill', group.total_mass, effectiveMarkerColor, group.flight_id || '', hideTriangle ? 1 : 0, isSelected ? 1 : 0, dangerous ? 1 : 0, deadlineState,
             group.utilizer_short_name || '', group.utilizer_color_main || '', group.utilizer_color_text || ''
         ].join('|');
         if (typeof svgCache !== 'undefined' && svgCache[cacheKey]) return svgCache[cacheKey];

@@ -107,7 +107,14 @@ class StatusBlockRepository
                 return [];
             }
 
-            $stmt = $this->pdo->query("SELECT id, name, zayavki_count, total_mass_tonn, zayavki_ids, created_at FROM overdue_blocks ORDER BY id ASC");
+            $collectDateColumn = $this->pdo->query("SHOW COLUMNS FROM overdue_blocks LIKE 'collect_by_date'");
+            $collectDateSelect = $collectDateColumn && $collectDateColumn->fetchColumn()
+                ? 'collect_by_date'
+                : 'NULL AS collect_by_date';
+
+            $stmt = $this->pdo->query(
+                "SELECT id, name, {$collectDateSelect}, zayavki_count, total_mass_tonn, zayavki_ids, created_at FROM overdue_blocks ORDER BY id ASC"
+            );
             if (!$stmt) {
                 mapError('StatusBlockRepository overdue query returned false');
                 return [];
