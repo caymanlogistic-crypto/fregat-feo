@@ -313,8 +313,9 @@ function overdueH(string $value): string
     const idsInput = document.getElementById('zayavki_ids');
     const note = document.getElementById('zayavki_ids_note');
     const status = document.getElementById('overdue_live_status');
-    const tokenInput = document.querySelector('input[name="form_token"]');
-    const blockInput = document.querySelector('input[name="block_id"]');
+    const blockForm = idsInput ? idsInput.closest('form') : null;
+    const tokenInput = blockForm ? blockForm.querySelector('input[name="form_token"]') : null;
+    const blockInput = blockForm ? blockForm.querySelector('input[name="block_id"]') : null;
     let requestNo = 0;
     let debounceTimer = null;
     let activeController = null;
