@@ -12,6 +12,8 @@ if (PHP_VERSION_ID < 70400) {
 }
 
 $config = require __DIR__ . '/config_arrival.php';
+// Keep the arrival radius deployable independently of the private configuration.
+$config['unload']['radius_m'] = 4000;
 date_default_timezone_set($config['timezone']);
 
 // 📝 Логирование
