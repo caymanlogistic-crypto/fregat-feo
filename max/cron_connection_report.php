@@ -70,6 +70,41 @@ function extractPlate(string $str): ?string {
     return null;
 }
 
+// Среди парных трекеров выбираем самый свежий, а не первый в ответе API.
+function findConnectionReportDevice(array $devices, ?string $plate): ?array {
+    if ($plate === null) {
+        return null;
+    }
+
+    $selected = null;
+    $latestTimestamp = null;
+
+    foreach ($devices as $device) {
+        if (extractPlate($device['name'] ?? '') !== $plate) {
+            continue;
+        }
+
+        // Если ни один трекер не передавал данные, сохраняем предупреждение.
+        $selected ??= $device;
+        if (empty($device['lastupdate'])) {
+            continue;
+        }
+
+        try {
+            $timestamp = (new DateTimeImmutable($device['lastupdate'], new DateTimeZone('UTC')))->getTimestamp();
+        } catch (Exception $e) {
+            continue;
+        }
+
+        if ($latestTimestamp === null || $timestamp > $latestTimestamp) {
+            $selected = $device;
+            $latestTimestamp = $timestamp;
+        }
+    }
+
+    return $selected;
+}
+
 // Функция получения данных с Slitex
 function fetchSlitexDevices(array $config): array {
     $url = "{$config['slitex']['base_url']}/api/external/devices";
@@ -162,15 +197,8 @@ foreach ($flights as $flight) {
     $driverName = explode(' ', trim($flight['full_name'] ?? ''))[0] ?? 'Водитель'; 
     $route = trim($flight['comment']) ?: 'Без маршрута';
     
-    // Ищем устройство в Slitex
-    $foundDevice = null;
-    foreach ($devices as $device) {
-        $plateApi = extractPlate($device['name'] ?? '');
-        if ($plateApi && $plateApi === $plateDB) {
-            $foundDevice = $device;
-            break;
-        }
-    }
+    // Пустые и устаревшие дубли не перекрывают действующий трекер.
+    $foundDevice = findConnectionReportDevice($devices, $plateDB);
     
     // --- ФОРМИРОВАНИЕ СООБЩЕНИЯ ---
     $indicator = '🟢'; 
