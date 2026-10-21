@@ -169,9 +169,11 @@ function sendMaxMessage(string $text, array $config): bool {
 
 // А. Получаем рейсы, которые сейчас в пути
 $query = "
-    SELECT f.id, f.comment, d.full_name, d.vehicle_make_plate 
+    SELECT f.id, f.comment, d.full_name, d.vehicle_make_plate,
+           u.`Имя` AS manager_first_name
     FROM flights f 
     JOIN drivers d ON f.driver_id = d.id 
+    LEFT JOIN users u ON u.id = f.assigned_manager_id
     WHERE f.status = 'started' AND f.actual_end_date IS NULL
     ORDER BY f.id
 ";
@@ -196,6 +198,8 @@ foreach ($flights as $flight) {
     $plateDB = extractPlate($flight['vehicle_make_plate'] ?? '');
     $driverName = explode(' ', trim($flight['full_name'] ?? ''))[0] ?? 'Водитель'; 
     $route = trim($flight['comment']) ?: 'Без маршрута';
+    $managerName = trim((string)($flight['manager_first_name'] ?? ''));
+    $managerName = $managerName !== '' ? $managerName : 'не указан';
     
     // Пустые и устаревшие дубли не перекрывают действующий трекер.
     $foundDevice = findConnectionReportDevice($devices, $plateDB);
@@ -256,7 +260,7 @@ foreach ($flights as $flight) {
     }
 
     // Собираем блок и добавляем в отчет
-    $reportItems[] = "{$indicator} {$line1}\n{$line2}\n{$line3}";
+    $reportItems[] = "{$indicator} {$line1}\n{$line2}\n{$line3}\nЛогист: {$managerName}";
 }
 
 // 6. Формирование итогового сообщения
