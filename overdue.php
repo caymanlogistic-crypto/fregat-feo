@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 session_start();
 require_once __DIR__ . '/config.php';
+require_once __DIR__ . '/map_files/Support/overdue_report.php';
 
 $pdo = new PDO(
     "mysql:host={$dbConfig['host']};dbname={$dbConfig['dbname']};charset=utf8mb4",
@@ -178,6 +179,23 @@ function overdueH(string $value): string
 {
     return htmlspecialchars($value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 }
+
+$reportBlockValue = $_GET['report_block'] ?? '0';
+$reportBlockId = is_string($reportBlockValue) && ctype_digit($reportBlockValue) ? (int)$reportBlockValue : 0;
+if (!in_array($reportBlockId, array_map('intval', array_column($blocks, 'id')), true)) {
+    $reportBlockId = 0;
+}
+$reportBlocks = $reportBlockId > 0
+    ? array_values(array_filter($blocks, static fn(array $block): bool => (int)$block['id'] === $reportBlockId))
+    : $blocks;
+$reportRows = [];
+$reportError = '';
+try {
+    $reportRows = overdueReportLoadRows($pdo, $reportBlocks);
+} catch (Throwable $e) {
+    error_log('overdue report failed: ' . $e->getMessage());
+    $reportError = 'Не удалось загрузить отчет по вывозу. Повторите попытку позже.';
+}
 ?>
 <!doctype html>
 <html lang="ru">
@@ -212,6 +230,10 @@ function overdueH(string $value): string
         .overdue-live-status.error { color: #842029; background: #f8d7da; border: 1px solid #f1aeb5; }
         .overdue-live-status.success { color: #0f5132; background: #d1e7dd; border: 1px solid #a3cfbb; }
         .overdue-inline { display: inline; }
+        .overdue-report-filter { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 14px 0; }
+        .overdue-report-filter select { max-width: 100%; padding: 8px; border: 1px solid #b9c1cc; border-radius: 6px; font: inherit; }
+        .overdue-report-table { min-width: 800px; }
+        .overdue-report-table th { white-space: normal; }
         @media (max-width: 760px) { .overdue-grid { grid-template-columns: 1fr; } }
     </style>
 </head>
@@ -302,6 +324,49 @@ function overdueH(string $value): string
                 </tbody>
             </table>
         </div>
+    </section>
+
+    <section class="overdue-card" id="overdue-report" aria-labelledby="overdue-report-title">
+        <h2 id="overdue-report-title">Отчет по вывозу просроченных заявок</h2>
+        <p class="overdue-note">Дата блока — срок «Собрать до». Даты вывоза — фактические даты рейса. Если заявка входит в несколько рейсов, каждый показан отдельной строкой. Заявки без рейса также включены в отчет.</p>
+        <form method="get" action="overdue.php#overdue-report" class="overdue-report-filter">
+            <?php if ($editBlock): ?><input type="hidden" name="edit" value="<?= (int)$editBlock['id'] ?>"><?php endif; ?>
+            <label for="report_block">Блок просрочки</label>
+            <select id="report_block" name="report_block">
+                <option value="0">Все блоки</option>
+                <?php foreach ($blocks as $block): ?>
+                    <option value="<?= (int)$block['id'] ?>"<?= $reportBlockId === (int)$block['id'] ? ' selected' : '' ?>>№<?= (int)$block['id'] ?> — <?= overdueH((string)$block['name']) ?></option>
+                <?php endforeach; ?>
+            </select>
+            <button class="btn btn-primary" type="submit">Показать отчет</button>
+        </form>
+        <?php if ($reportError !== ''): ?>
+            <div class="overdue-alert error" role="alert"><?= overdueH($reportError) ?></div>
+        <?php else: ?>
+        <div class="overdue-table-wrap">
+            <table class="overdue-table overdue-report-table">
+                <thead><tr><th>Блок</th><th>Дата блока<br>(собрать до)</th><th>Номер заявки</th><th>Находится в рейсе</th><th>Статус рейса</th><th>Дата начала<br>вывоза</th><th>Дата окончания<br>вывоза</th></tr></thead>
+                <tbody>
+                <?php if (!$reportRows): ?>
+                    <tr><td colspan="7">Нет заявок для отчета.</td></tr>
+                <?php else: ?>
+                    <?php foreach ($reportRows as $reportRow): ?>
+                    <?php $reportFlight = $reportRow['flight']; ?>
+                    <tr>
+                        <td>№<?= (int)$reportRow['block']['id'] ?> — <?= overdueH((string)$reportRow['block']['name']) ?></td>
+                        <td><?= overdueH(overdueReportDate($reportRow['block']['collect_by_date'] ?? null)) ?></td>
+                        <td><?= overdueH($reportRow['request_id']) ?></td>
+                        <td><?= $reportFlight ? 'Да, №' . (int)$reportFlight['id'] : 'Нет' ?></td>
+                        <td><?= $reportFlight ? overdueH(overdueReportStatusLabel((string)$reportFlight['status'])) : '—' ?></td>
+                        <td><?= $reportFlight ? overdueH(overdueReportDate($reportFlight['actual_start_date'] ?? null)) : '—' ?></td>
+                        <td><?= $reportFlight ? overdueH(overdueReportDate($reportFlight['actual_end_date'] ?? null)) : '—' ?></td>
+                    </tr>
+                    <?php endforeach; ?>
+                <?php endif; ?>
+                </tbody>
+            </table>
+        </div>
+        <?php endif; ?>
     </section>
 </main>
 <?php if ($tableExists && $collectDateColumnExists): ?>
