@@ -4,6 +4,9 @@ let weightById = {};
 let svgCache = {};
 let popupsDisabled = true;
 let multiRoute = null;
+let routeCalculationRunning = false;
+let routeCalculationGeneration = 0;
+let routeSelectionSignature = '';
 let editingRouteId = null;
 const UNLOAD_COORDS = [55.3228, 38.6969];
 const UNLOAD_ADDRESS = '\u041c\u043e\u0441\u043a\u043e\u0432\u0441\u043a\u0430\u044f \u043e\u0431\u043b., \u0433 \u0412\u043e\u0441\u043a\u0440\u0435\u0441\u0435\u043d\u0441\u043a, \u0443\u043b \u041a\u0438\u0440\u043e\u0432\u0430, \u0434 3 \u0432';
@@ -978,6 +981,15 @@ function createBalloonContent(group) {
 }
 
 function updateSelectionUI() {
+    const signature = `${editingRouteId || ''}|${selectedOrder.join(',')}`;
+    if (signature !== routeSelectionSignature) {
+        routeSelectionSignature = signature;
+        routeCalculationGeneration++;
+        routeCalculationRunning = false;
+        if (multiRoute) { map.geoObjects.remove(multiRoute); multiRoute = null; }
+        const info = document.getElementById('route-info-container');
+        if (info) info.textContent = '';
+    }
     const panel = document.getElementById('selection-panel');
     const list = document.getElementById('selected-list');
     const totalEl = document.getElementById('total-weight');
@@ -1013,7 +1025,7 @@ function updateSelectionUI() {
     statsEl.textContent = `${TXT.requestsCount}: ${selectedOrder.length} | ${TXT.addressesCount}: ${uniqueAddresses.size}`;
     totalEl.textContent = `${totalWeightLabel}: ${totalW.toLocaleString('ru-RU')} ${weightUnitLabel}`;
     input.value = selectedOrder.join(', ');
-    calcBtn.disabled = selectedOrder.length < 2;
+    calcBtn.disabled = selectedOrder.length < 1 || routeCalculationRunning;
     saveBtn.disabled = false;
 }
 
@@ -3643,50 +3655,159 @@ async function deleteRoute(id) {
     }
 }
 
-function calculateRoute() {
-    if (selectedOrder.length < 2) return alert(UI.msgMinTwoRequests);
-    
-    let pointsOrder = [];
-    
-    selectedOrder.forEach(id => {
-        groupsData.forEach(g => {
-            g.points.forEach(p => {
-                if (String(p.zayavka_id) === String(id)) {
-                    pointsOrder.push({id: p.zayavka_id, coords: [parseFloat(p.mno_d), parseFloat(p.mno_sh)]});
-                }
-            });
+function collectSelectedRouteStops() {
+    const ids = [...new Set(selectedOrder.map(String))];
+    const wanted = new Set(ids), byId = new Map();
+    groupsData.forEach(group => group.points.forEach(point => {
+        const id = String(point.zayavka_id);
+        if (!wanted.has(id) || byId.has(id)) return;
+        const coords = [parseFloat(point.mno_d), parseFloat(point.mno_sh)];
+        if (coords.every(Number.isFinite) && Math.abs(coords[0]) <= 90 && Math.abs(coords[1]) <= 180) byId.set(id, coords);
+    }));
+    const missing = ids.filter(id => !byId.has(id));
+    if (missing.length) throw new Error(`Не найдены корректные координаты заявок: ${missing.join(', ')}`);
+    const stops = new Map();
+    ids.forEach(id => {
+        const coords = byId.get(id), key = coords.join('|');
+        if (!stops.has(key)) stops.set(key, {coords, ids: []});
+        stops.get(key).ids.push(id);
+    });
+    return [...stops.values()];
+}
+
+function requestYandexRoadRoutes(points, cancelled, onRoutes) {
+    return new Promise((resolve, reject) => {
+        if (cancelled()) return reject(new Error('Расчёт отменён'));
+        const candidate = new ymaps.multiRouter.MultiRoute({
+            referencePoints: points,
+            params: {routingMode: 'auto', avoidTrafficJams: false, reverseGeocoding: false, results: 3}
+        }, {boundsAutoApply: false});
+        const timeout = setTimeout(() => finish(new Error('Яндекс не ответил. Повторите расчёт позже.')), 20000);
+        let finished = false;
+        function finish(error, result) {
+            if (finished) return;
+            finished = true;
+            clearTimeout(timeout);
+            candidate.model.destroy();
+            if (error) reject(error); else resolve(result);
+        }
+        candidate.model.events.add('requestfail', () => finish(new Error('Яндекс не построил маршрут. Проверьте доступность сервиса и дневной лимит.')));
+        candidate.model.events.add('requestsuccess', () => {
+            if (cancelled()) return finish(new Error('Расчёт отменён'));
+            try {
+                const routes = [];
+                candidate.getRoutes().each(route => routes.push(route));
+                if (!routes.length) throw new Error('Яндекс не нашёл дорожный маршрут');
+                finish(null, onRoutes(routes));
+            } catch (error) { finish(error); }
         });
     });
-    
-    if (pointsOrder.length < 2) return alert(UI.msgCoordsNotFound);
-    if(multiRoute) map.geoObjects.remove(multiRoute);
-    
-    let refs = pointsOrder.map(p => p.coords);
-    refs.push(UNLOAD_ADDRESS);
-    
-    multiRoute = new ymaps.multiRouter.MultiRoute({
-        referencePoints: refs,
-        routingMode: 'auto'
-    }, {
-        boundsAutoApply: true,
-        routeActiveStrokeWidth: 5,
-        routeActiveStrokeColor: "#007bff",
-        wayPointStartVisible: false,
-        wayPointFinishVisible: false,
-        viaPointVisible: false
-    });
-    
-    map.geoObjects.add(multiRoute);
-    
-    multiRoute.model.events.add('requestsuccess', function() {
-        const route = multiRoute.getRoutes().get(0);
-        if(route) {
-            const dist = route.properties.get('distance').value;
-            const dur = route.properties.get('duration').value;
-            const h = Math.floor(dur/3600), m = Math.floor((dur%3600)/60);
-            document.getElementById('route-info-container').innerHTML = `<div class="route-info"><div class="route-info-item">${UI.ruler} ${dist>1000?(dist/1000).toFixed(2)+' '+UI.km:dist+' '+UI.m}</div><div class="route-info-item">${UI.clock} ${h>0?h+UI.hourShort+' ':''}${m} ${UI.min}</div></div>`;
+}
+
+async function calculateRoute() {
+    if (!selectedOrder.length) return alert(UI.msgPickAtLeastOneRequest);
+    if (routeCalculationRunning) return;
+    const generation = ++routeCalculationGeneration;
+    const cancelled = () => generation !== routeCalculationGeneration;
+    const info = document.getElementById('route-info-container');
+    routeCalculationRunning = true;
+    document.getElementById('calc-route-btn').disabled = true;
+    if (multiRoute) { map.geoObjects.remove(multiRoute); multiRoute = null; }
+    info.textContent = 'Расчёт дорожного маршрута от Воскресенска…';
+    let displayedRoute = null;
+    try {
+        // 20 calculations/day * at most 10 calls = at most 200 calls/day here.
+        // Count geocoding and every routing chunk; no retry or full matrix for large sets.
+        const requestLimit = 10;
+        let requestCount = 0;
+        const loadRoutes = (points, onRoutes) => {
+            if (points.length > 9 || requestCount >= requestLimit) throw new Error('Достигнут лимит запросов для одного расчёта');
+            requestCount++;
+            return requestYandexRoadRoutes(points, cancelled, onRoutes);
+        };
+        const stops = collectSelectedRouteStops();
+        if (stops.length > 49) throw new Error('Для одного расчёта выберите не более 49 разных адресов.');
+        requestCount++;
+        const geocoded = await ymaps.geocode(UNLOAD_ADDRESS, {results: 1});
+        if (cancelled()) return;
+        const origin = geocoded.geoObjects.get(0)?.geometry.getCoordinates();
+        if (!origin || !origin.every(Number.isFinite)) throw new Error('Яндекс не определил адрес выгрузки в Воскресенске');
+        const refs = [origin, ...stops.map(stop => stop.coords)];
+        const chunksPerOrder = Math.ceil(stops.length / 8);
+        let orders;
+        if (stops.length === 1) {
+            orders = [[1]];
+        } else if (FregatRouteOptimization.roadBatches(stops.length).length + chunksPerOrder <= requestLimit - requestCount) {
+            const distances = await FregatRouteOptimization.roadDistances(refs,
+                points => loadRoutes(points, routes => routes.map(route => {
+                    const legs = [];
+                    route.getPaths().each(path => legs.push(Number(path.properties.get('distance')?.value)));
+                    return legs;
+                })),
+                () => { if (!cancelled()) info.textContent = `Яндекс: использовано ${requestCount} из ${requestLimit} запросов…`; },
+                cancelled);
+            orders = [FregatRouteOptimization.orderStops(distances).order];
+        } else {
+            const maxOrders = Math.floor((requestLimit - requestCount) / chunksPerOrder);
+            orders = FregatRouteOptimization.candidateOrders(refs, maxOrders);
         }
-    });
+        let result = null, bestOrder = null;
+        for (const order of orders) {
+            const points = [origin, ...order.map(index => stops[index - 1].coords)];
+            const measured = {coordinates: [], distance: 0, duration: 0};
+            for (let start = 0; start < points.length - 1; start += 8) {
+                const part = await loadRoutes(points.slice(start, start + 9), routes => {
+                    const shortest = routes.reduce((best, route) => Number(route.properties.get('distance')?.value) < Number(best.properties.get('distance')?.value) ? route : best);
+                    const coordinates = [];
+                    shortest.getPaths().each(path => {
+                        const pathCoords = path.properties.get('coordinates');
+                        if (!Array.isArray(pathCoords) || pathCoords.length < 2) throw new Error('Яндекс не вернул линию дорожного маршрута');
+                        for (const coords of pathCoords) coordinates.push(coords);
+                    });
+                    return {coordinates, distance: Number(shortest.properties.get('distance')?.value), duration: Number(shortest.properties.get('duration')?.value)};
+                });
+                if (cancelled()) return;
+                if (!Number.isFinite(part.distance) || !Number.isFinite(part.duration)) throw new Error('Яндекс не вернул расстояние или время');
+                for (const coords of part.coordinates) measured.coordinates.push(coords);
+                measured.distance += part.distance;
+                measured.duration += part.duration;
+                info.textContent = `Яндекс: использовано ${requestCount} из ${requestLimit} запросов…`;
+            }
+            if (!result || measured.distance < result.distance) { result = measured; bestOrder = order; }
+        }
+        if (cancelled()) return;
+        if (!result || !bestOrder) throw new Error('Не удалось получить полный дорожный маршрут');
+        if (!Number.isFinite(result.distance) || !Number.isFinite(result.duration)) throw new Error('Яндекс не вернул расстояние или время');
+        const orderedStops = bestOrder.map(index => stops[index - 1]);
+        const orderedRefs = [origin, ...orderedStops.map(stop => stop.coords)];
+        selectedOrder = orderedStops.flatMap(stop => stop.ids);
+        routeSelectionSignature = `${editingRouteId || ''}|${selectedOrder.join(',')}`;
+        updateSelectionUI();
+        refreshMarkerStyles();
+        displayedRoute = new ymaps.GeoObjectCollection();
+        displayedRoute.add(new ymaps.Polyline(result.coordinates, {}, {strokeWidth: 5, strokeColor: '#007bff'}));
+        orderedRefs.forEach((coords, index) => displayedRoute.add(new ymaps.Placemark(coords,
+            {iconContent: String(index), hintContent: index === 0 ? UNLOAD_ADDRESS : `Остановка ${index}`},
+            {preset: 'islands#blueCircleIcon'})));
+        multiRoute = displayedRoute;
+        map.geoObjects.add(displayedRoute);
+        const bounds = displayedRoute.getBounds();
+        if (bounds) map.setBounds(bounds, {checkZoomRange: true, zoomMargin: 30});
+        const h = Math.floor(result.duration / 3600), m = Math.floor(result.duration % 3600 / 60);
+        const label = 'Кратчайший из проверенных дорожных вариантов Яндекса. Абсолютный минимум не гарантируется.';
+        info.innerHTML = `<div class="route-info"><div class="route-info-item">${UI.ruler} ${(result.distance / 1000).toFixed(2)} ${UI.km}</div><div class="route-info-item">${UI.clock} ${h ? h + UI.hourShort + ' ' : ''}${m} ${UI.min}</div></div><div>Старт: Воскресенск → все выбранные адреса, без возврата.</div><div>${label}</div>`;
+        info.innerHTML += `<div>Запросов Яндексу: ${requestCount} из ${requestLimit}.</div>`;
+    } catch (error) {
+        if (!cancelled()) {
+            if (displayedRoute) { map.geoObjects.remove(displayedRoute); multiRoute = null; }
+            info.textContent = error.message || 'Не удалось рассчитать дорожный маршрут';
+        }
+    } finally {
+        if (!cancelled()) {
+            routeCalculationRunning = false;
+            document.getElementById('calc-route-btn').disabled = selectedOrder.length < 1;
+        }
+    }
 }
 
 ymaps.ready(init);

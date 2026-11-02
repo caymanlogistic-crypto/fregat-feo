@@ -96,6 +96,7 @@ window.MAP_BOOTSTRAP = {
     customLayers: <?= json_encode($customLayers, JSON_UNESCAPED_UNICODE) ?>
 };
 </script>
+<script src="map_files/assets/route_optimization.js?v=<?= (int)filemtime(__DIR__ . '/../assets/route_optimization.js') ?>"></script>
 <script src="map_files/assets/maptest.js?v=<?= (int)$jsVersion ?>"></script>
 <script src="map_files/assets/request_markers_v2.js?v=<?= (int)$requestMarkersV2Version ?>"></script>
 <script src="map_files/assets/warehouse_markers_v2.js?v=<?= (int)$warehouseMarkersV2Version ?>"></script>
