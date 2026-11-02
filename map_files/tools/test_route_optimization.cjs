@@ -55,8 +55,8 @@ check('missing roads fail explicitly instead of using straight-line distances', 
     assert.throws(() => optimizer.orderStops([[0, 1, Infinity], [Infinity, 0, 1], [Infinity, 1, 0]]), /дорогу/);
 });
 
-function makeRuntime() {
-    const elements = {'calc-route-btn': {disabled: false}, 'route-info-container': {textContent: '', innerHTML: ''}};
+function makeRuntime(sharedCache = new Map()) {
+    const elements = {'calc-route-btn': {disabled: false}, 'route-info-container': {textContent: '', innerHTML: '', dataset: {}}};
     const runtime = {
         selectedOrder: ['3', '1', '2', '4'], editingRouteId: null,
         groupsData: [{points: [
@@ -68,7 +68,23 @@ function makeRuntime() {
         routeCalculationRunning: false, routeCalculationGeneration: 0, routeSelectionSignature: '', multiRoute: null,
         FregatRouteOptimization: optimizer, UI: {ruler: 'Distance', km: 'km', clock: 'Time', hourShort: 'h', min: 'min'},
         document: {getElementById: id => elements[id]},
-        setTimeout, clearTimeout, calls: [], objects: [], alerts: [], geocodeCalls: 0,
+        setTimeout, clearTimeout, AbortController, calls: [], objects: [], alerts: [], geocodeCalls: 0,
+        fetch: async (url, options) => {
+            assert.equal(url, 'map_files/route_cache.php');
+            const payload = JSON.parse(options.body);
+            const key = payload.points.map(point => point.map(Number).map(value => value.toFixed(7)).join(',')).sort().join(';');
+            let record = sharedCache.get(key);
+            let data;
+            if (payload.action === 'claim') {
+                if (record?.result) data = {status: 'hit', result: record.result};
+                else { record = {token: 'test-lease'}; sharedCache.set(key, record); data = {status: 'compute', token: record.token}; }
+            } else if (payload.action === 'save') {
+                assert.equal(payload.token, record.token);
+                record.result = payload.result;
+                data = {status: 'saved', result: record.result};
+            } else { sharedCache.delete(key); data = {status: 'released'}; }
+            return {ok: true, json: async () => ({success: true, ...data})};
+        },
         updateSelectionUI() {}, refreshMarkerStyles() {}, alert(message) { runtime.alerts.push(message); },
         map: {geoObjects: {add(object) { runtime.objects.push(object); }, remove(object) { runtime.objects = runtime.objects.filter(item => item !== object); }}, setBounds() {}},
         ymaps: {
@@ -93,7 +109,7 @@ function makeRuntime() {
     };
     vm.createContext(runtime);
     vm.runInContext(source.match(/^const UNLOAD_ADDRESS = [^\r\n]+/m)[0], runtime);
-    for (const name of ['collectSelectedRouteStops', 'requestYandexRoadRoutes', 'calculateRoute']) {
+    for (const name of ['collectSelectedRouteStops', 'requestYandexRoadRoutes', 'routeCachePointKey', 'postRouteCache', 'claimRouteCache', 'calculateUncachedRoadRoute', 'calculateRoute']) {
         const match = source.match(new RegExp('^(?:async )?function ' + name + '\\([^]*?^}', 'm'));
         assert.ok(match, name + ' exists'); vm.runInContext(match[0], runtime);
     }
@@ -170,6 +186,30 @@ async function main() {
     check('oversized selection is rejected before spending a single API call', () => {
         assert.equal(excessive.geocodeCalls + excessive.calls.length, 0);
         assert.match(excessive.elements['route-info-container'].textContent, /49/);
+    });
+    const shared = new Map(), firstUser = makeRuntime(shared), secondUser = makeRuntime(shared);
+    await firstUser.calculateRoute();
+    secondUser.selectedOrder.reverse();
+    await secondUser.calculateRoute();
+    check('another browser/user reuses the shared result despite different input order, with zero Yandex calls', () => {
+        assert.ok(firstUser.calls.length > 0);
+        assert.equal(secondUser.calls.length + secondUser.geocodeCalls, 0);
+        assert.equal(secondUser.elements['route-info-container'].dataset.routeCache, 'hit');
+        assert.equal(secondUser.elements['route-info-container'].dataset.yandexRequests, '0');
+        assert.equal(secondUser.elements['route-info-container'].innerHTML, firstUser.elements['route-info-container'].innerHTML);
+        const stopOrder = user => [...new Set(user.selectedOrder.map(id => {
+            const point = user.groupsData[0].points.find(point => String(point.zayavka_id) === String(id));
+            return point.mno_d + ',' + point.mno_sh;
+        }))];
+        assert.deepEqual(plain(stopOrder(secondUser)), plain(stopOrder(firstUser)));
+        assert.deepEqual(plain(secondUser.selectedOrder).sort(), plain(firstUser.selectedOrder).sort());
+    });
+    const unavailable = makeRuntime();
+    unavailable.fetch = async () => ({ok: false, json: async () => ({success: false, message: 'Кэш недоступен'})});
+    await unavailable.calculateRoute();
+    check('cache failure cannot silently spend fresh Yandex requests', () => {
+        assert.equal(unavailable.calls.length + unavailable.geocodeCalls, 0);
+        assert.equal(unavailable.elements['route-info-container'].textContent, 'Кэш недоступен');
     });
     console.log(`${passed} checks passed`);
 }
