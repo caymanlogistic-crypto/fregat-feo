@@ -3713,7 +3713,7 @@ async function calculateRoute() {
     routeCalculationRunning = true;
     document.getElementById('calc-route-btn').disabled = true;
     if (multiRoute) { map.geoObjects.remove(multiRoute); multiRoute = null; }
-    info.textContent = 'Расчёт дорожного маршрута от Воскресенска…';
+    info.textContent = '';
     let displayedRoute = null;
     try {
         // 20 calculations/day * at most 10 calls = at most 200 calls/day here.
@@ -3744,7 +3744,7 @@ async function calculateRoute() {
                     route.getPaths().each(path => legs.push(Number(path.properties.get('distance')?.value)));
                     return legs;
                 })),
-                () => { if (!cancelled()) info.textContent = `Яндекс: использовано ${requestCount} из ${requestLimit} запросов…`; },
+                () => {},
                 cancelled);
             orders = [FregatRouteOptimization.orderStops(distances).order];
         } else {
@@ -3771,7 +3771,6 @@ async function calculateRoute() {
                 for (const coords of part.coordinates) measured.coordinates.push(coords);
                 measured.distance += part.distance;
                 measured.duration += part.duration;
-                info.textContent = `Яндекс: использовано ${requestCount} из ${requestLimit} запросов…`;
             }
             if (!result || measured.distance < result.distance) { result = measured; bestOrder = order; }
         }
@@ -3793,10 +3792,9 @@ async function calculateRoute() {
         map.geoObjects.add(displayedRoute);
         const bounds = displayedRoute.getBounds();
         if (bounds) map.setBounds(bounds, {checkZoomRange: true, zoomMargin: 30});
-        const h = Math.floor(result.duration / 3600), m = Math.floor(result.duration % 3600 / 60);
-        const label = 'Кратчайший из проверенных дорожных вариантов Яндекса. Абсолютный минимум не гарантируется.';
-        info.innerHTML = `<div class="route-info"><div class="route-info-item">${UI.ruler} ${(result.distance / 1000).toFixed(2)} ${UI.km}</div><div class="route-info-item">${UI.clock} ${h ? h + UI.hourShort + ' ' : ''}${m} ${UI.min}</div></div><div>Старт: Воскресенск → все выбранные адреса, без возврата.</div><div>${label}</div>`;
-        info.innerHTML += `<div>Запросов Яндексу: ${requestCount} из ${requestLimit}.</div>`;
+        const dist = result.distance, dur = result.duration;
+        const h = Math.floor(dur / 3600), m = Math.floor(dur % 3600 / 60);
+        info.innerHTML = `<div class="route-info"><div class="route-info-item">${UI.ruler} ${dist>1000?(dist/1000).toFixed(2)+' '+UI.km:dist+' '+UI.m}</div><div class="route-info-item">${UI.clock} ${h>0?h+UI.hourShort+' ':''}${m} ${UI.min}</div></div>`;
     } catch (error) {
         if (!cancelled()) {
             if (displayedRoute) { map.geoObjects.remove(displayedRoute); multiRoute = null; }

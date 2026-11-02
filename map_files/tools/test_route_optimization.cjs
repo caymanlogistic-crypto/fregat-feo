@@ -155,7 +155,10 @@ async function main() {
         assert.ok(budgeted.calls.every(call => call.referencePoints.length <= 9 && call.params.reverseGeocoding === false));
         assert.equal(new Set(budgeted.selectedOrder).size, size);
         assert.equal(budgeted.objects.length, 1, `no displayed route for ${size} stops`);
-        assert.match(budgeted.elements['route-info-container'].innerHTML, new RegExp(`Запросов Яндексу: ${used} из 10`));
+        const html = budgeted.elements['route-info-container'].innerHTML;
+        assert.equal((html.match(/class="route-info-item"/g) || []).length, 2);
+        assert.ok(html.endsWith('</div></div>'));
+        assert.doesNotMatch(html, /Старт:|Кратчайший|Абсолютный|Запросов Яндексу:/);
         maxCalls = Math.max(maxCalls, used);
     }
     check('all 1..49 address counts stay within 10 calls including geocoding and chunking', () => assert.ok(maxCalls <= 10));
