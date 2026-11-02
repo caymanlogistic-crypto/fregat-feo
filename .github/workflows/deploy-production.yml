@@ -51,5 +51,5 @@ jobs:
       - name: Verify production HTTP
         shell: bash
         run: |
-          curl --fail --silent --show-error --max-time 20 --output /dev/null http://spugovxsim.temp.swtest.ru/fregat/feo/maptest.php
-          curl --fail --silent --show-error --max-time 30 --output /dev/null http://spugovxsim.temp.swtest.ru/fregat/feo/map8000.php
+          curl --fail --silent --show-error --connect-timeout 10 --max-time 60 --retry 1 --retry-delay 2 --output /dev/null http://spugovxsim.temp.swtest.ru/fregat/feo/maptest.php
+          curl --fail --silent --show-error --connect-timeout 10 --max-time 60 --retry 1 --retry-delay 2 --output /dev/null http://spugovxsim.temp.swtest.ru/fregat/feo/map8000.php
