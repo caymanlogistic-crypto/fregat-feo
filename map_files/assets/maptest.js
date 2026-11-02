@@ -981,11 +981,12 @@ function createBalloonContent(group) {
 }
 
 function updateSelectionUI() {
-    const signature = `${editingRouteId || ''}|${selectedOrder.join(',')}`;
+    const signature = routeCalculationSignature();
     if (signature !== routeSelectionSignature) {
         routeSelectionSignature = signature;
         routeCalculationGeneration++;
         routeCalculationRunning = false;
+        updateRouteCalculationButton();
         if (multiRoute) { map.geoObjects.remove(multiRoute); multiRoute = null; }
         const info = document.getElementById('route-info-container');
         if (info) info.textContent = '';
@@ -1025,7 +1026,7 @@ function updateSelectionUI() {
     statsEl.textContent = `${TXT.requestsCount}: ${selectedOrder.length} | ${TXT.addressesCount}: ${uniqueAddresses.size}`;
     totalEl.textContent = `${totalWeightLabel}: ${totalW.toLocaleString('ru-RU')} ${weightUnitLabel}`;
     input.value = selectedOrder.join(', ');
-    calcBtn.disabled = selectedOrder.length < 1 || routeCalculationRunning;
+    updateRouteCalculationButton();
     saveBtn.disabled = false;
 }
 
@@ -3075,6 +3076,7 @@ async function loadWarehouses(keepExistingOnError = true) {
             return false;
         }
         warehousesData = data.warehouses;
+        populateRouteDestinations();
         await loadWarehouseStock();
         renderWarehousesLayer();
         return true;
@@ -3708,6 +3710,49 @@ function routeCachePointKey(coords) {
     return coords.map(value => Number(value).toFixed(7)).join(',');
 }
 
+function routeCalculationSignature() {
+    return `${editingRouteId || ''}|${selectedOrder.join(',')}|${document.getElementById('route-destination')?.value || ''}`;
+}
+
+function updateRouteCalculationButton() {
+    const button = document.getElementById('calc-route-btn');
+    if (!button) return;
+    button.disabled = selectedOrder.length < 1 || routeCalculationRunning;
+    button.setAttribute('aria-busy', String(routeCalculationRunning));
+    const spinner = button.querySelector('.route-calculation-spinner');
+    if (spinner) spinner.hidden = !routeCalculationRunning;
+}
+
+function routeDestinationWarehouses() {
+    if (warehousesData.some(warehouse => /воскресенск/i.test(`${warehouse.name} ${warehouse.address}`))) return warehousesData;
+    return [{id: -1, name: 'Воскресенск', address: UNLOAD_ADDRESS, latitude: null, longitude: null}, ...warehousesData];
+}
+
+function populateRouteDestinations() {
+    const select = document.getElementById('route-destination');
+    if (!select) return;
+    const previous = select.value;
+    const warehouses = routeDestinationWarehouses();
+    const current = warehouses.find(warehouse => String(warehouse.id) === previous);
+    const defaultWarehouse = current || warehouses.find(warehouse => /воскресенск/i.test(`${warehouse.name} ${warehouse.address}`));
+    select.innerHTML = warehouses.map(warehouse => `<option value="${Number(warehouse.id)}"${warehouse.id === defaultWarehouse?.id ? ' selected' : ''}>${escapeHtml(warehouse.name)}</option>`).join('');
+    select.disabled = false;
+    updateSelectionUI();
+}
+
+function selectedRouteDestination() {
+    const id = document.getElementById('route-destination')?.value;
+    const warehouse = routeDestinationWarehouses().find(item => String(item.id) === String(id));
+    if (!warehouse) throw new Error('Выберите склад для расчёта');
+    const lat = warehouse.latitude, lon = warehouse.longitude;
+    const coords = lat !== null && lat !== '' && lon !== null && lon !== '' &&
+        Number.isFinite(Number(lat)) && Number.isFinite(Number(lon)) && Math.abs(Number(lat)) <= 90 && Math.abs(Number(lon)) <= 180
+        ? [Number(lat), Number(lon)] : null;
+    const address = String(warehouse.address || '').trim();
+    if (!coords && !address) throw new Error('У выбранного склада не указан адрес или координаты');
+    return {id: Number(warehouse.id), address, coords};
+}
+
 async function postRouteCache(action, points, extra = {}) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15000);
@@ -3726,18 +3771,18 @@ async function postRouteCache(action, points, extra = {}) {
     } finally { clearTimeout(timeout); }
 }
 
-async function claimRouteCache(points, cancelled) {
+async function claimRouteCache(points, destination, cancelled) {
     const deadline = Date.now() + 330000;
     for (;;) {
         if (cancelled()) throw new Error('Расчёт отменён');
-        const response = await postRouteCache('claim', points);
+        const response = await postRouteCache('claim', points, {destination});
         if (response.status === 'hit' || response.status === 'compute') return response;
         if (response.status !== 'pending' || Date.now() >= deadline) throw new Error('Расчёт уже выполняется в другом окне. Повторите позже.');
         await new Promise(resolve => setTimeout(resolve, 1500));
     }
 }
 
-async function calculateUncachedRoadRoute(stops, cancelled) {
+async function calculateUncachedRoadRoute(stops, destination, cancelled) {
     // 20 calculations/day * at most 10 calls = at most 200 calls/day here.
     // Count geocoding and every routing chunk; no retry or full matrix for large sets.
     const requestLimit = 10;
@@ -3747,22 +3792,27 @@ async function calculateUncachedRoadRoute(stops, cancelled) {
         requestCount++;
         return requestYandexRoadRoutes(points, cancelled, onRoutes);
     };
-    requestCount++;
-    const geocoded = await ymaps.geocode(UNLOAD_ADDRESS, {results: 1});
-    if (cancelled()) return;
-    const origin = geocoded.geoObjects.get(0)?.geometry.getCoordinates();
-    if (!origin || !origin.every(Number.isFinite)) throw new Error('Яндекс не определил адрес выгрузки в Воскресенске');
-    const refs = [origin, ...stops.map(stop => stop.coords)];
+    let finish = destination.coords;
+    if (!finish) {
+        requestCount++;
+        const geocoded = await ymaps.geocode(destination.address, {results: 1});
+        if (cancelled()) return;
+        finish = geocoded.geoObjects.get(0)?.geometry.getCoordinates();
+    }
+    if (!finish || !finish.every(Number.isFinite)) throw new Error('Яндекс не определил адрес выбранного склада');
+    const refs = [finish, ...stops.map(stop => stop.coords)];
     const chunksPerOrder = Math.ceil(stops.length / 8);
     let orders;
     if (stops.length === 1) {
         orders = [[1]];
     } else if (FregatRouteOptimization.roadBatches(stops.length).length + chunksPerOrder <= requestLimit - requestCount) {
         const distances = await FregatRouteOptimization.roadDistances(refs,
-            points => loadRoutes(points, routes => routes.map(route => {
+            // Optimize the reversed directed graph, then reverse the stop order.
+            // Road requests themselves always follow the real driving direction.
+            points => loadRoutes(points.slice().reverse(), routes => routes.map(route => {
                 const legs = [];
                 route.getPaths().each(path => legs.push(Number(path.properties.get('distance')?.value)));
-                return legs;
+                return legs.reverse();
             })),
             () => {},
             cancelled);
@@ -3773,7 +3823,7 @@ async function calculateUncachedRoadRoute(stops, cancelled) {
     }
     let result = null, bestOrder = null;
     for (const order of orders) {
-        const points = [origin, ...order.map(index => stops[index - 1].coords)];
+        const points = [...order.slice().reverse().map(index => stops[index - 1].coords), finish];
         const measured = {coordinates: [], distance: 0, duration: 0};
         for (let start = 0; start < points.length - 1; start += 8) {
             const part = await loadRoutes(points.slice(start, start + 9), routes => {
@@ -3797,7 +3847,7 @@ async function calculateUncachedRoadRoute(stops, cancelled) {
     if (cancelled()) return;
     if (!result || !bestOrder) throw new Error('Не удалось получить полный дорожный маршрут');
     if (!Number.isFinite(result.distance) || !Number.isFinite(result.duration)) throw new Error('Яндекс не вернул расстояние или время');
-    return {...result, origin, order_keys: bestOrder.map(index => routeCachePointKey(stops[index - 1].coords)), request_count: requestCount};
+    return {...result, destination: finish, order_keys: bestOrder.slice().reverse().map(index => routeCachePointKey(stops[index - 1].coords)), request_count: requestCount};
 }
 
 async function calculateRoute() {
@@ -3807,26 +3857,27 @@ async function calculateRoute() {
     const cancelled = () => generation !== routeCalculationGeneration;
     const info = document.getElementById('route-info-container');
     routeCalculationRunning = true;
-    document.getElementById('calc-route-btn').disabled = true;
+    updateRouteCalculationButton();
     if (multiRoute) { map.geoObjects.remove(multiRoute); multiRoute = null; }
     info.textContent = '';
     info.dataset.routeCache = '';
     info.dataset.yandexRequests = '0';
-    let displayedRoute = null, cachePoints = null, leaseToken = null;
+    let displayedRoute = null, cachePoints = null, leaseToken = null, destination = null;
     try {
         const stops = collectSelectedRouteStops();
         if (stops.length > 49) throw new Error('Для одного расчёта выберите не более 49 разных адресов.');
+        destination = selectedRouteDestination();
         cachePoints = stops.map(stop => stop.coords.map(value => Number(value).toFixed(7)));
-        const cached = await claimRouteCache(cachePoints, cancelled);
+        const cached = await claimRouteCache(cachePoints, destination, cancelled);
         if (cached.status === 'compute') leaseToken = cached.token;
         if (cancelled()) return;
         const cacheHit = cached.status === 'hit';
         let result = cached.result, requestCount = 0;
         if (!cacheHit) {
-            result = await calculateUncachedRoadRoute(stops, cancelled);
+            result = await calculateUncachedRoadRoute(stops, destination, cancelled);
             if (cancelled()) return;
             requestCount = result.request_count;
-            const saved = await postRouteCache('save', cachePoints, {token: leaseToken, result});
+            const saved = await postRouteCache('save', cachePoints, {destination, token: leaseToken, result});
             leaseToken = null;
             result = saved.result;
         }
@@ -3835,15 +3886,15 @@ async function calculateRoute() {
         const byKey = new Map(stops.map(stop => [routeCachePointKey(stop.coords), stop]));
         const orderedStops = result.order_keys.map(key => byKey.get(key));
         if (orderedStops.length !== stops.length || orderedStops.some(stop => !stop)) throw new Error('В сохранённом маршруте изменился набор адресов');
-        const orderedRefs = [result.origin, ...orderedStops.map(stop => stop.coords)];
+        const orderedRefs = [...orderedStops.map(stop => stop.coords), result.destination];
         selectedOrder = orderedStops.flatMap(stop => stop.ids);
-        routeSelectionSignature = `${editingRouteId || ''}|${selectedOrder.join(',')}`;
+        routeSelectionSignature = routeCalculationSignature();
         updateSelectionUI();
         refreshMarkerStyles();
         displayedRoute = new ymaps.GeoObjectCollection();
         displayedRoute.add(new ymaps.Polyline(result.coordinates, {}, {strokeWidth: 5, strokeColor: '#007bff'}));
         orderedRefs.forEach((coords, index) => displayedRoute.add(new ymaps.Placemark(coords,
-            {iconContent: String(index), hintContent: index === 0 ? UNLOAD_ADDRESS : `Остановка ${index}`},
+            {iconContent: String(index), hintContent: index === orderedRefs.length - 1 ? destination.address : `Остановка ${index}`},
             {preset: 'islands#blueCircleIcon'})));
         multiRoute = displayedRoute;
         map.geoObjects.add(displayedRoute);
@@ -3861,10 +3912,10 @@ async function calculateRoute() {
             info.textContent = error.message || 'Не удалось рассчитать дорожный маршрут';
         }
     } finally {
-        if (leaseToken && cachePoints) await postRouteCache('release', cachePoints, {token: leaseToken}).catch(() => {});
+        if (leaseToken && cachePoints) await postRouteCache('release', cachePoints, {destination, token: leaseToken}).catch(() => {});
         if (!cancelled()) {
             routeCalculationRunning = false;
-            document.getElementById('calc-route-btn').disabled = selectedOrder.length < 1;
+            updateRouteCalculationButton();
         }
     }
 }
@@ -4258,6 +4309,7 @@ if (startCancelBtn) startCancelBtn.addEventListener('click', closeStartConfirmMo
     loadManagers();
     const warehouseLayerCheckbox = document.getElementById('warehouse_layer_visible');
     warehousesVisible = warehouseLayerCheckbox ? !!warehouseLayerCheckbox.checked : true;
+    populateRouteDestinations();
     loadWarehouses();
     
     if (placemarks.length > 0 || trackerPlacemarks.length > 0) {

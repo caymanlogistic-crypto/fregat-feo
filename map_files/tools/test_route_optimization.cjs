@@ -56,9 +56,11 @@ check('missing roads fail explicitly instead of using straight-line distances', 
 });
 
 function makeRuntime(sharedCache = new Map()) {
-    const elements = {'calc-route-btn': {disabled: false}, 'route-info-container': {textContent: '', innerHTML: '', dataset: {}}};
+    const spinner = {hidden: true};
+    const elements = {'route-destination': {value: '1'}, 'calc-route-btn': {disabled: false, setAttribute(name, value) { this[name] = value; }, querySelector() { return spinner; }}, 'route-info-container': {textContent: '', innerHTML: '', dataset: {}}};
     const runtime = {
         selectedOrder: ['3', '1', '2', '4'], editingRouteId: null,
+        warehousesData: [{id: 1, name: 'Воскресенск', address: 'Test warehouse', latitude: 55, longitude: 37}],
         groupsData: [{points: [
             {zayavka_id: 1, mno_d: '55.1', mno_sh: '37.1'},
             {zayavka_id: 2, mno_d: '55.2', mno_sh: '37.2'},
@@ -72,7 +74,7 @@ function makeRuntime(sharedCache = new Map()) {
         fetch: async (url, options) => {
             assert.equal(url, 'map_files/route_cache.php');
             const payload = JSON.parse(options.body);
-            const key = payload.points.map(point => point.map(Number).map(value => value.toFixed(7)).join(',')).sort().join(';');
+            const key = JSON.stringify(payload.destination) + ':' + payload.points.map(point => point.map(Number).map(value => value.toFixed(7)).join(',')).sort().join(';');
             let record = sharedCache.get(key);
             let data;
             if (payload.action === 'claim') {
@@ -94,7 +96,7 @@ function makeRuntime(sharedCache = new Map()) {
                 const routes = [2, 1].map(multiplier => {
                     const paths = model.referencePoints.slice(1).map((to, index) => {
                         const from = model.referencePoints[index];
-                        const distance = Math.round(Math.abs(to[0] - from[0]) * 10000) * multiplier;
+                        const distance = (runtime.legDistance ? runtime.legDistance(from, to) : Math.round(Math.abs(to[0] - from[0]) * 10000)) * multiplier;
                         return {properties: {get: name => name === 'coordinates' ? [from, [from[0], to[1]], to] : {value: distance}}};
                     });
                     return {getPaths: () => ({each: callback => paths.forEach(callback)}), properties: {get: () => ({value: paths.reduce((sum, leg) => sum + leg.properties.get('distance').value, 0)})}};
@@ -109,11 +111,11 @@ function makeRuntime(sharedCache = new Map()) {
     };
     vm.createContext(runtime);
     vm.runInContext(source.match(/^const UNLOAD_ADDRESS = [^\r\n]+/m)[0], runtime);
-    for (const name of ['collectSelectedRouteStops', 'requestYandexRoadRoutes', 'routeCachePointKey', 'postRouteCache', 'claimRouteCache', 'calculateUncachedRoadRoute', 'calculateRoute']) {
+    for (const name of ['routeDestinationWarehouses', 'routeCalculationSignature', 'updateRouteCalculationButton', 'selectedRouteDestination', 'collectSelectedRouteStops', 'requestYandexRoadRoutes', 'routeCachePointKey', 'postRouteCache', 'claimRouteCache', 'calculateUncachedRoadRoute', 'calculateRoute']) {
         const match = source.match(new RegExp('^(?:async )?function ' + name + '\\([^]*?^}', 'm'));
         assert.ok(match, name + ' exists'); vm.runInContext(match[0], runtime);
     }
-    runtime.elements = elements;
+    runtime.elements = elements; runtime.spinner = spinner;
     return runtime;
 }
 
@@ -124,11 +126,16 @@ async function main() {
         assert.equal(stops.length, 3);
         assert.deepEqual(stops.flatMap(stop => stop.ids).sort(), ['1', '2', '3', '4']);
     });
-    await runtime.calculateRoute();
-    check('integration starts in Voskresensk, visits all requests, and has no return leg', () => {
+    const calculating = runtime.calculateRoute();
+    check('spinner is shown and button disabled while awaiting the shared cache', () => {
+        assert.equal(runtime.spinner.hidden, false);
+        assert.equal(runtime.elements['calc-route-btn'].disabled, true);
+    });
+    await calculating;
+    check('integration finishes at the selected warehouse, visits all requests, and has no return leg', () => {
         const refs = runtime.calls.at(-1).referencePoints;
-        assert.deepEqual(plain(refs), [[55, 37], [55.1, 37.1], [55.2, 37.2], [55.3, 37.3]]);
-        assert.deepEqual(plain(runtime.selectedOrder), ['1', '4', '2', '3']);
+        assert.deepEqual(plain(refs), [[55.3, 37.3], [55.2, 37.2], [55.1, 37.1], [55, 37]]);
+        assert.deepEqual(plain(runtime.selectedOrder), ['3', '2', '1', '4']);
         assert.equal(runtime.calls[0].params.routingMode, 'auto');
         assert.equal(runtime.calls[0].params.avoidTrafficJams, false);
         assert.equal(runtime.calls[0].params.results, 3);
@@ -138,9 +145,10 @@ async function main() {
         assert.equal(runtime.objects.length, 1);
         assert.equal(runtime.objects[0].items.length, 5);
         assert.equal(runtime.elements['calc-route-btn'].disabled, false);
+        assert.equal(runtime.spinner.hidden, true);
     });
     const one = makeRuntime(); one.selectedOrder = ['1']; await one.calculateRoute();
-    check('single selected request is routable from Voskresensk', () => assert.equal(one.calls.at(-1).referencePoints.length, 2));
+    check('single selected request is routable to the selected warehouse', () => assert.equal(one.calls.at(-1).referencePoints.length, 2));
     const missing = makeRuntime(); missing.selectedOrder = ['999']; await missing.calculateRoute();
     check('missing request coordinates abort without partial route or API calls', () => {
         assert.equal(missing.calls.length, 0);
@@ -210,6 +218,39 @@ async function main() {
     check('cache failure cannot silently spend fresh Yandex requests', () => {
         assert.equal(unavailable.calls.length + unavailable.geocodeCalls, 0);
         assert.equal(unavailable.elements['route-info-container'].textContent, 'Кэш недоступен');
+    });
+    const other = makeRuntime(shared);
+    other.warehousesData[0] = {id: 2, address: 'Other warehouse', latitude: 56, longitude: 38};
+    other.elements['route-destination'].value = '2';
+    await other.calculateRoute();
+    check('another warehouse has a separate cache and is the final Yandex point', () => {
+        assert.ok(other.calls.length > 0);
+        assert.deepEqual(plain(other.calls.at(-1).referencePoints.at(-1)), [56, 38]);
+        assert.equal(other.elements['route-info-container'].dataset.routeCache, 'saved');
+    });
+    const directed = makeRuntime();
+    const costs = [[0,90,90,90],[1,0,2,50],[90,50,0,2],[90,50,50,0]];
+    directed.legDistance = (from, to) => costs[Math.round((from[0]-55)*10)][Math.round((to[0]-55)*10)];
+    await directed.calculateRoute();
+    check('asymmetric roads are optimized toward the destination, without reversing driven geometry', () => {
+        assert.deepEqual(plain(directed.selectedOrder), ['2','3','1','4']);
+        assert.match(directed.elements['route-info-container'].innerHTML, /53/);
+        assert.deepEqual(plain(directed.objects[0].items[0].coordinates.at(-1)), [55,37]);
+    });
+    const fallback = makeRuntime();
+    fallback.warehousesData = [{id: 5, name: 'Other', address: 'Other warehouse', latitude: 56, longitude: 38}];
+    fallback.elements['route-destination'].value = '-1';
+    await fallback.calculateRoute();
+    check('Voskresensk remains available by default when absent from the warehouse database', () => {
+        assert.equal(fallback.geocodeCalls, 1);
+        assert.equal(fallback.objects.length, 1);
+    });
+    const geocoded = makeRuntime();
+    geocoded.warehousesData[0].latitude = null;
+    await geocoded.calculateRoute();
+    check('warehouse without coordinates geocodes its address within the same ten-call budget', () => {
+        assert.equal(geocoded.geocodeCalls, 1);
+        assert.ok(geocoded.calls.length + geocoded.geocodeCalls <= 10);
     });
     console.log(`${passed} checks passed`);
 }

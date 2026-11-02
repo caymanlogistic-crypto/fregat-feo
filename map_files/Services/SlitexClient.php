@@ -25,6 +25,15 @@ class SlitexClient
         return $this->fetch('/api/external/devices/admin-fields');
     }
 
+    public function fetchTrackerSnapshot(): array
+    {
+        // Both reads share three seconds, including connection time. No retries.
+        $deadline = microtime(true) + 3.0;
+        $devices = $this->fetch('/api/external/devices', $deadline);
+        $fields = $devices ? $this->fetch('/api/external/devices/admin-fields', $deadline) : [];
+        return [$devices, $fields];
+    }
+
     private function acquireRenameLock(): array
     {
         // Keep the advisory lock on a dedicated connection. Callers may use the
@@ -192,13 +201,16 @@ class SlitexClient
         }
     }
 
-    public function fetch($path)
+    public function fetch($path, ?float $deadline = null)
     {
         if (!$this->isConfigured()) {
             return [];
         }
 
         $url = $this->baseUrl . $path;
+
+        $remainingMs = $deadline === null ? 30000 : (int)floor(($deadline - microtime(true)) * 1000);
+        if ($remainingMs < 1) return [];
 
         $ch = curl_init();
         if ($ch === false) {
@@ -210,8 +222,8 @@ class SlitexClient
             CURLOPT_URL => $url,
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_HTTPHEADER => ["X-API-Token: {$this->token}"],
-            CURLOPT_TIMEOUT => 30,
-            CURLOPT_CONNECTTIMEOUT => 10,
+            CURLOPT_TIMEOUT_MS => $remainingMs,
+            CURLOPT_CONNECTTIMEOUT_MS => min(10000, $remainingMs),
             CURLOPT_SSL_VERIFYPEER => true,
         ]);
 

@@ -7,7 +7,7 @@
 
     const ENDPOINT = 'map_files/get_transport_trackers.php';
     const REFRESH_MS = 60000;
-    const REQUEST_TIMEOUT_MS = 20000;
+    const REQUEST_TIMEOUT_MS = 5000;
     const ACTIVE_24H_MINUTES = 24 * 60;
     let installed = false;
     let refreshPromise = null;

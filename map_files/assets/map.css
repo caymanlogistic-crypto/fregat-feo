@@ -71,6 +71,10 @@
 .route-buttons-secondary { margin-bottom: 8px; }
 .route-btn { flex: 1; padding: 7px 8px; min-height: 32px; border: none; border-radius: 4px; cursor: pointer; font-weight: 600; font-size: 12px; transition: all 0.2s; display: inline-flex; align-items: center; justify-content: center; }
 .calculate-route-btn { background: #f3f5f7; color: #374151; border: 1px solid #d1d7de; } .calculate-route-btn:hover { background: #ebeff3; border-color: #c4ccd5; }
+#route-destination { min-height: 0; height: 30px; font-family: inherit; }
+.route-calculation-spinner { display: inline-block; width: 12px; height: 12px; margin-right: 6px; border: 2px solid #c4ccd5; border-top-color: #374151; border-radius: 50%; vertical-align: -2px; animation: route-calculation-spin .7s linear infinite; }
+.route-calculation-spinner[hidden] { display: none; }
+@keyframes route-calculation-spin { to { transform: rotate(360deg); } }
 .save-route-btn { background: #26a69a; color: #fff; border: 1px solid #219487; } .save-route-btn:hover { background: #1f8f84; border-color: #1b7f75; }
 .save-route-btn.is-editing { background: #1f8f84; border-color: #1b7f75; }
 .edit-data-btn { background: #f3f5f7; color: #374151; border: 1px solid #d1d7de; }

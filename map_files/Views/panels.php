@@ -81,8 +81,10 @@ $t = static function (string $key, string $fallback): string {
     <div id="selected-list"></div>
     <div class="hint"><?= $t('selection.hint.ids', 'Введите ID через запятую или Enter') ?></div>
     <textarea id="route-input" class="manual-input" placeholder="<?= $t('selection.placeholder.ids', 'ID заявок...') ?>"></textarea>
+    <label class="hint" for="route-destination">Считать до:</label>
+    <select id="route-destination" class="manual-input" onchange="updateSelectionUI()" disabled><option value="">Воскресенск</option></select>
     <div class="route-buttons">
-        <button class="route-btn calculate-route-btn" id="calc-route-btn" onclick="calculateRoute()" disabled><?= $t('button.calculate_route', 'Рассчитать') ?></button>
+        <button class="route-btn calculate-route-btn" id="calc-route-btn" onclick="calculateRoute()" disabled><span class="route-calculation-spinner" aria-hidden="true" hidden></span><?= $t('button.calculate_route', 'Рассчитать') ?></button>
         <button class="route-btn save-route-btn" id="saveRouteBtn" onclick="promptSaveRoute()" disabled><?= $t('button.save_route', 'Сохранить маршрут') ?></button>
     </div>
     <div class="route-buttons route-buttons-secondary">

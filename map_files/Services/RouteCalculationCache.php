@@ -15,7 +15,10 @@ final class RouteCalculationCache
     public function handle(string $action, array $points, array $payload = []): array
     {
         $keys = $this->pointKeys($points);
-        $key = hash('sha256', self::PROFILE . ':' . implode(';', $keys));
+        // Keep old open tabs isolated from the new fixed-destination calculation.
+        $destination = array_key_exists('destination', $payload) ? $this->destination($payload['destination']) : null;
+        $profile = $destination === null ? self::PROFILE : 'warehouse-finish:auto:no-traffic:open:v2:' . json_encode($destination, JSON_THROW_ON_ERROR);
+        $key = hash('sha256', $profile . ':' . implode(';', $keys));
         $this->prepareDirectory();
         $lock = @fopen($this->directory . '/' . $key . '.lock', 'c');
         if ($lock === false) throw new RuntimeException('Общее хранилище расчётов недоступно');
@@ -49,7 +52,7 @@ final class RouteCalculationCache
             if (($record['lease_until'] ?? 0) <= $now) {
                 throw new InvalidArgumentException('Время сохранения расчёта истекло. Повторите расчёт.');
             }
-            $result = $this->validateResult($payload['result'] ?? null, $keys);
+            $result = $this->validateResult($payload['result'] ?? null, $keys, $destination);
             $this->write($path, ['result' => $result, 'expires_at' => $now + self::TTL]);
             return ['status' => 'saved', 'result' => $result];
         } finally {
@@ -83,7 +86,19 @@ final class RouteCalculationCache
         return [$lat, $lon];
     }
 
-    private function validateResult(mixed $value, array $keys): array
+    private function destination(mixed $value): array
+    {
+        if (!is_array($value) || !is_numeric($value['id'] ?? null) || ((int)$value['id'] < 1 && (int)$value['id'] !== -1)) {
+            throw new InvalidArgumentException('Выберите склад для расчёта');
+        }
+        $address = trim((string)($value['address'] ?? ''));
+        $coords = ($value['coords'] ?? null) === null ? null : $this->coordinates($value['coords']);
+        if (strlen($address) > 2000 || ($coords === null && $address === '')) throw new InvalidArgumentException('У склада не указан адрес');
+        if ($coords !== null) $coords = array_map(fn($number) => sprintf('%.7F', $number), $coords);
+        return ['id' => (int)$value['id'], 'address' => $address, 'coords' => $coords];
+    }
+
+    private function validateResult(mixed $value, array $keys, ?array $destination): array
     {
         if (!is_array($value) || !is_array($value['order_keys'] ?? null)) throw new InvalidArgumentException('Некорректный результат расчёта');
         $order = $value['order_keys'];
@@ -97,7 +112,16 @@ final class RouteCalculationCache
         $line = $value['coordinates'] ?? null;
         if (!is_array($line) || count($line) < 2 || count($line) > 300000) throw new InvalidArgumentException('Некорректная линия маршрута');
         $coordinates = array_map(fn($point) => $this->coordinates($point), $line);
-        return ['order_keys' => array_values($order), 'origin' => $this->coordinates($value['origin'] ?? null),
+        $endpoint = $destination === null ? 'origin' : 'destination';
+        $endpointCoords = $this->coordinates($value[$endpoint] ?? null);
+        if ($destination !== null && $destination['coords'] !== null) {
+            foreach ([0, 1] as $axis) {
+                if (abs($endpointCoords[$axis] - (float)$destination['coords'][$axis]) > 0.0000001) {
+                    throw new InvalidArgumentException('В сохранённом маршруте изменился склад');
+                }
+            }
+        }
+        return ['order_keys' => array_values($order), $endpoint => $endpointCoords,
             'distance' => (float)$distance, 'duration' => (float)$duration, 'coordinates' => $coordinates];
     }
 

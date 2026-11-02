@@ -11,8 +11,7 @@ class TrackerService
     public function getTrackers()
     {
         $trackers = [];
-        $devices = $this->client->fetchDevices();
-        $adminFields = $this->client->fetchAdminFields();
+        [$devices, $adminFields] = $this->client->fetchTrackerSnapshot();
         if (!is_array($devices)) {
             $devices = [];
         }
