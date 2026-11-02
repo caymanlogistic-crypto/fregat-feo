@@ -66,6 +66,7 @@ check('closed API batches cover all directed pairs, including roads back to the 
         const seen = new Set();
         for (const batch of optimizer.roadBatches(count, true)) {
             assert.ok(batch.length >= 2 && batch.length <= 9);
+            if (batch.at(-1) === 0) assert.equal(batch.length, 2, 'return legs must be separate direct requests');
             for (let i=1;i<batch.length;i++) {
                 const key=batch[i-1]+':'+batch[i];
                 assert.ok(!seen.has(key)); seen.add(key);

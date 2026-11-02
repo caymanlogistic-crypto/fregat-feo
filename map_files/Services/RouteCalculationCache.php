@@ -20,7 +20,7 @@ final class RouteCalculationCache
         $fromWarehouse = ($payload['direction'] ?? '') === 'from-warehouse';
         $roundTrip = ($payload['return_to_warehouse'] ?? false) === true;
         if ($fromWarehouse && $destination === null) throw new InvalidArgumentException('Выберите склад для расчёта');
-        $mode = $fromWarehouse ? 'warehouse-start:auto:no-traffic:v3:' . ($roundTrip ? 'round:' : 'open:') : 'warehouse-finish:auto:no-traffic:open:v2:';
+        $mode = $fromWarehouse ? 'warehouse-start:auto:no-traffic:' . ($roundTrip ? 'v4:round:' : 'v3:open:') : 'warehouse-finish:auto:no-traffic:open:v2:';
         $profile = $destination === null ? self::PROFILE : $mode . json_encode($destination, JSON_THROW_ON_ERROR);
         $key = hash('sha256', $profile . ':' . implode(';', $keys));
         $this->prepareDirectory();

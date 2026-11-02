@@ -94,8 +94,11 @@
     // Pack required directed pairs into routes of at most 9 points to reduce API calls.
     // Incoming edges to the origin are included only for a closed route.
     function roadBatches(count, returnToOrigin = false) {
+        // Avoid repeatedly crossing the warehouse in one very long compound route.
+        // Measure each return leg directly; the caller checks this total budget.
+        if (returnToOrigin) return roadBatches(count).concat(Array.from({length: count}, (_, i) => [i + 1, 0]));
         const pending = Array.from({length: count + 1}, (_, from) =>
-            new Set(Array.from({length: count + (returnToOrigin ? 1 : 0)}, (_, i) => i + (returnToOrigin ? 0 : 1)).filter(to => to !== from)));
+            new Set(Array.from({length: count}, (_, i) => i + 1).filter(to => to !== from)));
         const batches = [];
         for (;;) {
             let from = pending.findIndex(targets => targets.size > 0);
