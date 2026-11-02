@@ -10,9 +10,9 @@ const source = fs.readFileSync(path.join(__dirname, '../assets/maptest.js'), 'ut
 let passed = 0;
 function check(name, fn) { fn(); passed++; console.log('PASS ' + name); }
 function plain(value) { return JSON.parse(JSON.stringify(value)); }
-function bruteMinimum(matrix, order = [], left = matrix.slice(1).map((_, i) => i + 1)) {
-    if (!left.length) return optimizer.routeLength(order, matrix);
-    return Math.min(...left.map(next => bruteMinimum(matrix, order.concat(next), left.filter(id => id !== next))));
+function bruteMinimum(matrix, order = [], left = matrix.slice(1).map((_, i) => i + 1), roundTrip = false) {
+    if (!left.length) return optimizer.routeLength(order, matrix, roundTrip);
+    return Math.min(...left.map(next => bruteMinimum(matrix, order.concat(next), left.filter(id => id !== next), roundTrip)));
 }
 
 check('fixed origin, free finish; first stop need not be nearest', () => {
@@ -54,10 +54,31 @@ check('API batches cover every required directed pair exactly once; no forced re
 check('missing roads fail explicitly instead of using straight-line distances', () => {
     assert.throws(() => optimizer.orderStops([[0, 1, Infinity], [Infinity, 0, 1], [Infinity, 1, 0]]), /дорогу/);
 });
+check('closed directed-road minimum agrees with independent exhaustive reference for 2..7 stops', () => {
+    for (let size = 2; size <= 7; size++) {
+        const matrix = Array.from({length:size+1}, (_,from) => Array.from({length:size+1}, (_,to) => from === to ? 0 : 1 + ((from*31+to*43+from*to*7)%113)));
+        const result = optimizer.orderStops(matrix, true);
+        assert.equal(optimizer.routeLength(result.order, matrix, true), bruteMinimum(matrix, [], matrix.slice(1).map((_,i)=>i+1), true));
+    }
+});
+check('closed API batches cover all directed pairs, including roads back to the warehouse', () => {
+    for (const count of [1,2,7,16,49]) {
+        const seen = new Set();
+        for (const batch of optimizer.roadBatches(count, true)) {
+            assert.ok(batch.length >= 2 && batch.length <= 9);
+            for (let i=1;i<batch.length;i++) {
+                const key=batch[i-1]+':'+batch[i];
+                assert.ok(!seen.has(key)); seen.add(key);
+            }
+        }
+        assert.equal(seen.size, count*(count+1));
+        for(let i=1;i<=count;i++) assert.ok(seen.has(i+':0'));
+    }
+});
 
 function makeRuntime(sharedCache = new Map()) {
     const spinner = {hidden: true};
-    const elements = {'route-destination': {value: '1'}, 'calc-route-btn': {disabled: false, setAttribute(name, value) { this[name] = value; }, querySelector() { return spinner; }}, 'route-info-container': {textContent: '', innerHTML: '', dataset: {}}};
+    const elements = {'route-return-to-warehouse': {checked: false}, 'route-destination': {value: '1'}, 'calc-route-btn': {disabled: false, setAttribute(name, value) { this[name] = value; }, querySelector() { return spinner; }}, 'route-info-container': {textContent: '', innerHTML: '', dataset: {}}};
     const runtime = {
         selectedOrder: ['3', '1', '2', '4'], editingRouteId: null,
         warehousesData: [{id: 1, name: 'Воскресенск', address: 'Test warehouse', latitude: 55, longitude: 37}],
@@ -74,7 +95,7 @@ function makeRuntime(sharedCache = new Map()) {
         fetch: async (url, options) => {
             assert.equal(url, 'map_files/route_cache.php');
             const payload = JSON.parse(options.body);
-            const key = JSON.stringify(payload.destination) + ':' + payload.points.map(point => point.map(Number).map(value => value.toFixed(7)).join(',')).sort().join(';');
+            const key = JSON.stringify([payload.destination, payload.direction, payload.return_to_warehouse]) + ':' + payload.points.map(point => point.map(Number).map(value => value.toFixed(7)).join(',')).sort().join(';');
             let record = sharedCache.get(key);
             let data;
             if (payload.action === 'claim') {
@@ -132,10 +153,10 @@ async function main() {
         assert.equal(runtime.elements['calc-route-btn'].disabled, true);
     });
     await calculating;
-    check('integration finishes at the selected warehouse, visits all requests, and has no return leg', () => {
+    check('integration starts at the selected warehouse, visits all requests, and has no return leg', () => {
         const refs = runtime.calls.at(-1).referencePoints;
-        assert.deepEqual(plain(refs), [[55.3, 37.3], [55.2, 37.2], [55.1, 37.1], [55, 37]]);
-        assert.deepEqual(plain(runtime.selectedOrder), ['3', '2', '1', '4']);
+        assert.deepEqual(plain(refs), [[55, 37], [55.1, 37.1], [55.2, 37.2], [55.3, 37.3]]);
+        assert.deepEqual(plain(runtime.selectedOrder), ['1', '4', '2', '3']);
         assert.equal(runtime.calls[0].params.routingMode, 'auto');
         assert.equal(runtime.calls[0].params.avoidTrafficJams, false);
         assert.equal(runtime.calls[0].params.results, 3);
@@ -148,7 +169,7 @@ async function main() {
         assert.equal(runtime.spinner.hidden, true);
     });
     const one = makeRuntime(); one.selectedOrder = ['1']; await one.calculateRoute();
-    check('single selected request is routable to the selected warehouse', () => assert.equal(one.calls.at(-1).referencePoints.length, 2));
+    check('single selected request is routable from the selected warehouse', () => assert.equal(one.calls.at(-1).referencePoints.length, 2));
     const missing = makeRuntime(); missing.selectedOrder = ['999']; await missing.calculateRoute();
     check('missing request coordinates abort without partial route or API calls', () => {
         assert.equal(missing.calls.length, 0);
@@ -167,8 +188,10 @@ async function main() {
     await assert.rejects(() => optimizer.roadDistances([[0, 0], [1, 1], [2, 2]], async () => { loads++; cancel = true; return [[1]]; }, () => {}, () => cancel), /отменён/);
     check('selection cancellation stops further API batches', () => assert.equal(loads, 1));
     let maxCalls = 0;
-    for (let size = 1; size <= 49; size++) {
+    for (const roundTrip of [false, true]) for (const geocode of [false, true]) for (let size = 1; size <= 49; size++) {
         const budgeted = makeRuntime();
+        budgeted.elements['route-return-to-warehouse'].checked = roundTrip;
+        if (geocode) budgeted.warehousesData[0].latitude = null;
         budgeted.selectedOrder = Array.from({length: size}, (_, i) => String(i + 1));
         budgeted.groupsData = [{points: budgeted.selectedOrder.map(id => ({
             zayavka_id: id, mno_d: String(55 + Number(id) / 100), mno_sh: String(37 + Number(id) / 200)
@@ -185,7 +208,7 @@ async function main() {
         assert.doesNotMatch(html, /Старт:|Кратчайший|Абсолютный|Запросов Яндексу:/);
         maxCalls = Math.max(maxCalls, used);
     }
-    check('all 1..49 address counts stay within 10 calls including geocoding and chunking', () => assert.ok(maxCalls <= 10));
+    check('open and closed routes for 1..49 stops stay within 10 calls, with or without geocoding', () => assert.ok(maxCalls <= 10));
     check('20 daily calculations cost at most 200 explicit API calls', () => assert.ok(maxCalls * 20 <= 200));
     const excessive = makeRuntime();
     excessive.selectedOrder = Array.from({length: 50}, (_, i) => String(i + 1));
@@ -223,19 +246,39 @@ async function main() {
     other.warehousesData[0] = {id: 2, address: 'Other warehouse', latitude: 56, longitude: 38};
     other.elements['route-destination'].value = '2';
     await other.calculateRoute();
-    check('another warehouse has a separate cache and is the final Yandex point', () => {
+    check('another warehouse has a separate cache and is the first Yandex point', () => {
         assert.ok(other.calls.length > 0);
-        assert.deepEqual(plain(other.calls.at(-1).referencePoints.at(-1)), [56, 38]);
+        assert.deepEqual(plain(other.calls.at(-1).referencePoints[0]), [56, 38]);
         assert.equal(other.elements['route-info-container'].dataset.routeCache, 'saved');
     });
     const directed = makeRuntime();
     const costs = [[0,90,90,90],[1,0,2,50],[90,50,0,2],[90,50,50,0]];
     directed.legDistance = (from, to) => costs[Math.round((from[0]-55)*10)][Math.round((to[0]-55)*10)];
     await directed.calculateRoute();
-    check('asymmetric roads are optimized toward the destination, without reversing driven geometry', () => {
-        assert.deepEqual(plain(directed.selectedOrder), ['2','3','1','4']);
-        assert.match(directed.elements['route-info-container'].innerHTML, /53/);
-        assert.deepEqual(plain(directed.objects[0].items[0].coordinates.at(-1)), [55,37]);
+    check('asymmetric roads are optimized from the selected warehouse in actual driving direction', () => {
+        assert.deepEqual(plain(directed.selectedOrder), ['1','4','2','3']);
+        assert.match(directed.elements['route-info-container'].innerHTML, /94/);
+        assert.deepEqual(plain(directed.objects[0].items[0].coordinates[0]), [55,37]);
+    });
+    const closed = makeRuntime(shared);
+    closed.elements['route-return-to-warehouse'].checked = true;
+    closed.legDistance = directed.legDistance;
+    await closed.calculateRoute();
+    check('checkbox includes return road in optimization, distance, and drawn geometry', () => {
+        assert.ok(closed.calls.length > 0, 'closed route cannot reuse the open route cache');
+        assert.deepEqual(plain(closed.selectedOrder), ['2','3','1','4']);
+        assert.match(closed.elements['route-info-container'].innerHTML, /143/);
+        const coords = closed.objects[0].items[0].coordinates;
+        assert.deepEqual(plain(coords[0]), [55,37]);
+        assert.deepEqual(plain(coords.at(-1)), [55,37]);
+        assert.deepEqual(plain(closed.calls.at(-1).referencePoints.at(-1)), [55,37]);
+    });
+    const repeatClosed = makeRuntime(shared);
+    repeatClosed.elements['route-return-to-warehouse'].checked = true;
+    await repeatClosed.calculateRoute();
+    check('closed route is shared across users without any additional Yandex calls', () => {
+        assert.equal(repeatClosed.calls.length + repeatClosed.geocodeCalls, 0);
+        assert.equal(repeatClosed.elements['route-info-container'].innerHTML, closed.elements['route-info-container'].innerHTML);
     });
     const fallback = makeRuntime();
     fallback.warehousesData = [{id: 5, name: 'Other', address: 'Other warehouse', latitude: 56, longitude: 38}];

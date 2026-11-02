@@ -15,9 +15,13 @@ final class RouteCalculationCache
     public function handle(string $action, array $points, array $payload = []): array
     {
         $keys = $this->pointKeys($points);
-        // Keep old open tabs isolated from the new fixed-destination calculation.
+        // Old open tabs keep their own direction; new calculations start at the warehouse.
         $destination = array_key_exists('destination', $payload) ? $this->destination($payload['destination']) : null;
-        $profile = $destination === null ? self::PROFILE : 'warehouse-finish:auto:no-traffic:open:v2:' . json_encode($destination, JSON_THROW_ON_ERROR);
+        $fromWarehouse = ($payload['direction'] ?? '') === 'from-warehouse';
+        $roundTrip = ($payload['return_to_warehouse'] ?? false) === true;
+        if ($fromWarehouse && $destination === null) throw new InvalidArgumentException('Выберите склад для расчёта');
+        $mode = $fromWarehouse ? 'warehouse-start:auto:no-traffic:v3:' . ($roundTrip ? 'round:' : 'open:') : 'warehouse-finish:auto:no-traffic:open:v2:';
+        $profile = $destination === null ? self::PROFILE : $mode . json_encode($destination, JSON_THROW_ON_ERROR);
         $key = hash('sha256', $profile . ':' . implode(';', $keys));
         $this->prepareDirectory();
         $lock = @fopen($this->directory . '/' . $key . '.lock', 'c');
@@ -52,7 +56,7 @@ final class RouteCalculationCache
             if (($record['lease_until'] ?? 0) <= $now) {
                 throw new InvalidArgumentException('Время сохранения расчёта истекло. Повторите расчёт.');
             }
-            $result = $this->validateResult($payload['result'] ?? null, $keys, $destination);
+            $result = $this->validateResult($payload['result'] ?? null, $keys, $destination, $fromWarehouse);
             $this->write($path, ['result' => $result, 'expires_at' => $now + self::TTL]);
             return ['status' => 'saved', 'result' => $result];
         } finally {
@@ -98,7 +102,7 @@ final class RouteCalculationCache
         return ['id' => (int)$value['id'], 'address' => $address, 'coords' => $coords];
     }
 
-    private function validateResult(mixed $value, array $keys, ?array $destination): array
+    private function validateResult(mixed $value, array $keys, ?array $destination, bool $fromWarehouse): array
     {
         if (!is_array($value) || !is_array($value['order_keys'] ?? null)) throw new InvalidArgumentException('Некорректный результат расчёта');
         $order = $value['order_keys'];
@@ -112,7 +116,7 @@ final class RouteCalculationCache
         $line = $value['coordinates'] ?? null;
         if (!is_array($line) || count($line) < 2 || count($line) > 300000) throw new InvalidArgumentException('Некорректная линия маршрута');
         $coordinates = array_map(fn($point) => $this->coordinates($point), $line);
-        $endpoint = $destination === null ? 'origin' : 'destination';
+        $endpoint = $destination === null || $fromWarehouse ? 'origin' : 'destination';
         $endpointCoords = $this->coordinates($value[$endpoint] ?? null);
         if ($destination !== null && $destination['coords'] !== null) {
             foreach ([0, 1] as $axis) {

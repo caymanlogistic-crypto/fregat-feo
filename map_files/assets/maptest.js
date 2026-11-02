@@ -3711,7 +3711,7 @@ function routeCachePointKey(coords) {
 }
 
 function routeCalculationSignature() {
-    return `${editingRouteId || ''}|${selectedOrder.join(',')}|${document.getElementById('route-destination')?.value || ''}`;
+    return `${editingRouteId || ''}|${selectedOrder.join(',')}|${document.getElementById('route-destination')?.value || ''}|${!!document.getElementById('route-return-to-warehouse')?.checked}`;
 }
 
 function updateRouteCalculationButton() {
@@ -3771,18 +3771,18 @@ async function postRouteCache(action, points, extra = {}) {
     } finally { clearTimeout(timeout); }
 }
 
-async function claimRouteCache(points, destination, cancelled) {
+async function claimRouteCache(points, context, cancelled) {
     const deadline = Date.now() + 330000;
     for (;;) {
         if (cancelled()) throw new Error('Расчёт отменён');
-        const response = await postRouteCache('claim', points, {destination});
+        const response = await postRouteCache('claim', points, context);
         if (response.status === 'hit' || response.status === 'compute') return response;
         if (response.status !== 'pending' || Date.now() >= deadline) throw new Error('Расчёт уже выполняется в другом окне. Повторите позже.');
         await new Promise(resolve => setTimeout(resolve, 1500));
     }
 }
 
-async function calculateUncachedRoadRoute(stops, destination, cancelled) {
+async function calculateUncachedRoadRoute(stops, destination, roundTrip, cancelled) {
     // 20 calculations/day * at most 10 calls = at most 200 calls/day here.
     // Count geocoding and every routing chunk; no retry or full matrix for large sets.
     const requestLimit = 10;
@@ -3792,38 +3792,36 @@ async function calculateUncachedRoadRoute(stops, destination, cancelled) {
         requestCount++;
         return requestYandexRoadRoutes(points, cancelled, onRoutes);
     };
-    let finish = destination.coords;
-    if (!finish) {
+    let origin = destination.coords;
+    if (!origin) {
         requestCount++;
         const geocoded = await ymaps.geocode(destination.address, {results: 1});
         if (cancelled()) return;
-        finish = geocoded.geoObjects.get(0)?.geometry.getCoordinates();
+        origin = geocoded.geoObjects.get(0)?.geometry.getCoordinates();
     }
-    if (!finish || !finish.every(Number.isFinite)) throw new Error('Яндекс не определил адрес выбранного склада');
-    const refs = [finish, ...stops.map(stop => stop.coords)];
-    const chunksPerOrder = Math.ceil(stops.length / 8);
+    if (!origin || !origin.every(Number.isFinite)) throw new Error('Яндекс не определил адрес выбранного склада');
+    const refs = [origin, ...stops.map(stop => stop.coords)];
+    const chunksPerOrder = Math.ceil((stops.length + (roundTrip ? 1 : 0)) / 8);
     let orders;
     if (stops.length === 1) {
         orders = [[1]];
-    } else if (FregatRouteOptimization.roadBatches(stops.length).length + chunksPerOrder <= requestLimit - requestCount) {
+    } else if (FregatRouteOptimization.roadBatches(stops.length, roundTrip).length + chunksPerOrder <= requestLimit - requestCount) {
         const distances = await FregatRouteOptimization.roadDistances(refs,
-            // Optimize the reversed directed graph, then reverse the stop order.
-            // Road requests themselves always follow the real driving direction.
-            points => loadRoutes(points.slice().reverse(), routes => routes.map(route => {
+            points => loadRoutes(points, routes => routes.map(route => {
                 const legs = [];
                 route.getPaths().each(path => legs.push(Number(path.properties.get('distance')?.value)));
-                return legs.reverse();
+                return legs;
             })),
             () => {},
-            cancelled);
-        orders = [FregatRouteOptimization.orderStops(distances).order];
+            cancelled, roundTrip);
+        orders = [FregatRouteOptimization.orderStops(distances, roundTrip).order];
     } else {
         const maxOrders = Math.floor((requestLimit - requestCount) / chunksPerOrder);
-        orders = FregatRouteOptimization.candidateOrders(refs, maxOrders);
+        orders = FregatRouteOptimization.candidateOrders(refs, maxOrders, roundTrip);
     }
     let result = null, bestOrder = null;
     for (const order of orders) {
-        const points = [...order.slice().reverse().map(index => stops[index - 1].coords), finish];
+        const points = [origin, ...order.map(index => stops[index - 1].coords), ...(roundTrip ? [origin] : [])];
         const measured = {coordinates: [], distance: 0, duration: 0};
         for (let start = 0; start < points.length - 1; start += 8) {
             const part = await loadRoutes(points.slice(start, start + 9), routes => {
@@ -3847,7 +3845,7 @@ async function calculateUncachedRoadRoute(stops, destination, cancelled) {
     if (cancelled()) return;
     if (!result || !bestOrder) throw new Error('Не удалось получить полный дорожный маршрут');
     if (!Number.isFinite(result.distance) || !Number.isFinite(result.duration)) throw new Error('Яндекс не вернул расстояние или время');
-    return {...result, destination: finish, order_keys: bestOrder.slice().reverse().map(index => routeCachePointKey(stops[index - 1].coords)), request_count: requestCount};
+    return {...result, origin, order_keys: bestOrder.map(index => routeCachePointKey(stops[index - 1].coords)), request_count: requestCount};
 }
 
 async function calculateRoute() {
@@ -3862,22 +3860,24 @@ async function calculateRoute() {
     info.textContent = '';
     info.dataset.routeCache = '';
     info.dataset.yandexRequests = '0';
-    let displayedRoute = null, cachePoints = null, leaseToken = null, destination = null;
+    let displayedRoute = null, cachePoints = null, leaseToken = null, destination = null, cacheContext = null;
     try {
         const stops = collectSelectedRouteStops();
         if (stops.length > 49) throw new Error('Для одного расчёта выберите не более 49 разных адресов.');
         destination = selectedRouteDestination();
+        const roundTrip = !!document.getElementById('route-return-to-warehouse')?.checked;
+        cacheContext = {destination, direction: 'from-warehouse', return_to_warehouse: roundTrip};
         cachePoints = stops.map(stop => stop.coords.map(value => Number(value).toFixed(7)));
-        const cached = await claimRouteCache(cachePoints, destination, cancelled);
+        const cached = await claimRouteCache(cachePoints, cacheContext, cancelled);
         if (cached.status === 'compute') leaseToken = cached.token;
         if (cancelled()) return;
         const cacheHit = cached.status === 'hit';
         let result = cached.result, requestCount = 0;
         if (!cacheHit) {
-            result = await calculateUncachedRoadRoute(stops, destination, cancelled);
+            result = await calculateUncachedRoadRoute(stops, destination, roundTrip, cancelled);
             if (cancelled()) return;
             requestCount = result.request_count;
-            const saved = await postRouteCache('save', cachePoints, {destination, token: leaseToken, result});
+            const saved = await postRouteCache('save', cachePoints, {...cacheContext, token: leaseToken, result});
             leaseToken = null;
             result = saved.result;
         }
@@ -3886,7 +3886,7 @@ async function calculateRoute() {
         const byKey = new Map(stops.map(stop => [routeCachePointKey(stop.coords), stop]));
         const orderedStops = result.order_keys.map(key => byKey.get(key));
         if (orderedStops.length !== stops.length || orderedStops.some(stop => !stop)) throw new Error('В сохранённом маршруте изменился набор адресов');
-        const orderedRefs = [...orderedStops.map(stop => stop.coords), result.destination];
+        const orderedRefs = [result.origin, ...orderedStops.map(stop => stop.coords), ...(roundTrip ? [result.origin] : [])];
         selectedOrder = orderedStops.flatMap(stop => stop.ids);
         routeSelectionSignature = routeCalculationSignature();
         updateSelectionUI();
@@ -3894,7 +3894,7 @@ async function calculateRoute() {
         displayedRoute = new ymaps.GeoObjectCollection();
         displayedRoute.add(new ymaps.Polyline(result.coordinates, {}, {strokeWidth: 5, strokeColor: '#007bff'}));
         orderedRefs.forEach((coords, index) => displayedRoute.add(new ymaps.Placemark(coords,
-            {iconContent: String(index), hintContent: index === orderedRefs.length - 1 ? destination.address : `Остановка ${index}`},
+            {iconContent: String(index), hintContent: index === 0 || (roundTrip && index === orderedRefs.length - 1) ? destination.address : `Остановка ${index}`},
             {preset: 'islands#blueCircleIcon'})));
         multiRoute = displayedRoute;
         map.geoObjects.add(displayedRoute);
@@ -3912,7 +3912,7 @@ async function calculateRoute() {
             info.textContent = error.message || 'Не удалось рассчитать дорожный маршрут';
         }
     } finally {
-        if (leaseToken && cachePoints) await postRouteCache('release', cachePoints, {destination, token: leaseToken}).catch(() => {});
+        if (leaseToken && cachePoints) await postRouteCache('release', cachePoints, {...cacheContext, token: leaseToken}).catch(() => {});
         if (!cancelled()) {
             routeCalculationRunning = false;
             updateRouteCalculationButton();

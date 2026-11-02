@@ -1,24 +1,24 @@
 (function (root) {
     'use strict';
 
-    function routeLength(order, distances) {
+    function routeLength(order, distances, returnToOrigin = false) {
         let total = 0, previous = 0;
         for (const next of order) {
             total += distances[previous][next];
             previous = next;
         }
-        return total;
+        return total + (returnToOrigin ? distances[previous][0] : 0);
     }
 
-    // Fixed origin, free finish, directed road distances. No return to the origin.
+    // Fixed origin, optional return, directed road distances.
     // Held–Karp finds the minimum for up to 16 stops without enumerating permutations.
-    function orderStops(distances) {
+    function orderStops(distances, returnToOrigin = false) {
         const count = distances.length - 1;
         if (count < 1 || distances.some(row => row.length !== count + 1)) {
             throw new Error('Некорректная таблица дорожных расстояний');
         }
         for (let from = 0; from <= count; from++) {
-            for (let to = 1; to <= count; to++) {
+            for (let to = returnToOrigin ? 0 : 1; to <= count; to++) {
                 if (from !== to && (!Number.isFinite(distances[from][to]) || distances[from][to] < 0)) {
                     throw new Error('Яндекс не построил дорогу ко всем выбранным точкам');
                 }
@@ -45,8 +45,9 @@
                 }
             }
             let mask = states - 1, last = 0;
+            const endCost = index => costs[mask * count + index] + (returnToOrigin ? distances[index + 1][0] : 0);
             for (let i = 1; i < count; i++) {
-                if (costs[mask * count + i] < costs[mask * count + last]) last = i;
+                if (endCost(i) < endCost(last)) last = i;
             }
             const order = [];
             while (last !== -1) {
@@ -73,7 +74,7 @@
                 order.push(next);
                 remaining.delete(next);
             }
-            const length = routeLength(order, distances);
+            const length = routeLength(order, distances, returnToOrigin);
             if (length < bestLength) { best = order; bestLength = length; }
         }
         for (let pass = 0; pass < 4; pass++) {
@@ -81,7 +82,7 @@
             for (let from = 0; from < count; from++) {
                 for (let to = from + 1; to < count; to++) {
                     const candidate = best.slice(0, from).concat(best.slice(from, to + 1).reverse(), best.slice(to + 1));
-                    const length = routeLength(candidate, distances);
+                    const length = routeLength(candidate, distances, returnToOrigin);
                     if (length < bestLength) { best = candidate; bestLength = length; improved = true; }
                 }
             }
@@ -91,10 +92,10 @@
     }
 
     // Pack required directed pairs into routes of at most 9 points to reduce API calls.
-    // Incoming edges to the origin are unnecessary for an open route.
-    function roadBatches(count) {
+    // Incoming edges to the origin are included only for a closed route.
+    function roadBatches(count, returnToOrigin = false) {
         const pending = Array.from({length: count + 1}, (_, from) =>
-            new Set(Array.from({length: count}, (_, i) => i + 1).filter(to => to !== from)));
+            new Set(Array.from({length: count + (returnToOrigin ? 1 : 0)}, (_, i) => i + (returnToOrigin ? 0 : 1)).filter(to => to !== from)));
         const batches = [];
         for (;;) {
             let from = pending.findIndex(targets => targets.size > 0);
@@ -110,9 +111,9 @@
         }
     }
 
-    async function roadDistances(points, loadLegs, onProgress, cancelled) {
+    async function roadDistances(points, loadLegs, onProgress, cancelled, returnToOrigin = false) {
         const distances = points.map((_, from) => points.map((__, to) => from === to ? 0 : Infinity));
-        const batches = roadBatches(points.length - 1);
+        const batches = roadBatches(points.length - 1, returnToOrigin);
         for (let i = 0; i < batches.length; i++) {
             if (cancelled()) throw new Error('Расчёт отменён');
             const batch = batches[i];
@@ -132,7 +133,7 @@
         return distances;
     }
 
-    function candidateOrders(points, limit) {
+    function candidateOrders(points, limit, returnToOrigin = false) {
         // Coordinates only propose a few orders. They never supply the displayed km.
         // Every candidate is measured on Yandex roads, under the caller's fixed budget.
         const radians = value => value * Math.PI / 180;
@@ -141,7 +142,7 @@
             const h = Math.sin(lat / 2) ** 2 + Math.cos(radians(from[0])) * Math.cos(radians(to[0])) * Math.sin(lon / 2) ** 2;
             return 2 * Math.atan2(Math.sqrt(h), Math.sqrt(Math.max(0, 1 - h)));
         }));
-        const proposed = orderStops(distances).order;
+        const proposed = orderStops(distances, returnToOrigin).order;
         const original = points.slice(1).map((_, i) => i + 1);
         const candidates = [], seen = new Set();
         const add = order => {
