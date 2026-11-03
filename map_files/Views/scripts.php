@@ -1,6 +1,13 @@
 <?php
 $entryPoint = basename((string)($_SERVER['SCRIPT_NAME'] ?? $_SERVER['PHP_SELF'] ?? ''));
 $displayMassField = $entryPoint === 'map2.php' ? 'mass_brutto' : 'mass_netto';
+$selectionRequestInfo = [];
+foreach (($routeInfoMap ?? []) as $requestId => $info) {
+    $selectionRequestInfo[$requestId] = [
+        'mass_netto' => (float)($info['mass_netto'] ?? 0),
+        'mass_brutto' => (float)($info['mass_brutto'] ?? 0),
+    ];
+}
 if ($displayMassField === 'mass_brutto' && isset($routeInfoMap) && is_array($routeInfoMap)) {
     $applyGrossMassToRouteCard = static function (array $card) use ($routeInfoMap): array {
         $sumTons = 0.0;
@@ -84,6 +91,7 @@ window.MAP_BOOTSTRAP = {
     initialTrackers: <?= $trackersJson ?>,
     allTrackers: <?= $allTrackersJson ?>,
     routeCardsMeta: <?= $routeCardsMetaJson ?>,
+    requestInfoById: <?= json_encode($selectionRequestInfo) ?: '{}' ?>,
     foundRoutesData: <?= $foundRoutesJson ?>,
     driversForSelect: <?= $driversForSelectJson ?>,
     routeCardsBuildError: <?= json_encode($routeCardsBuildError, JSON_UNESCAPED_UNICODE) ?>,

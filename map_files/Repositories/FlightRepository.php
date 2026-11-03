@@ -11,7 +11,12 @@ class FlightRepository
     public function fetchStatusesForActual()
     {
         try {
-            $stmt = $this->pdo->query("SELECT id, zayavki_ids, status, source_warehouse_id FROM flights ORDER BY block_date DESC");
+            $directSelect = "'' AS direct_zayavki_ids";
+            $columnStmt = $this->pdo->query("SHOW COLUMNS FROM flights LIKE 'direct_zayavki_ids'");
+            if ($columnStmt && $columnStmt->fetch(PDO::FETCH_ASSOC)) {
+                $directSelect = 'direct_zayavki_ids';
+            }
+            $stmt = $this->pdo->query("SELECT id, zayavki_ids, status, source_warehouse_id, route_type, {$directSelect} FROM flights ORDER BY block_date DESC");
             if (!$stmt) {
                 mapError('FlightRepository query returned false');
                 return [];

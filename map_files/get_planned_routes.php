@@ -165,6 +165,7 @@ try {
     $plannedRoutes = [];
     $foundRoutes = [];
     $startedRoutes = [];
+    $allRequestIds = [];
 
     while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
         if (!is_array($row)) {
@@ -178,6 +179,9 @@ try {
         }
 
         $zayIds = parseZayavkiIds((string)($row['zayavki_ids'] ?? ''));
+        foreach ($zayIds as $zayId) {
+            $allRequestIds[$zayId] = $zayId;
+        }
         $unloadType = strtoupper(trim((string)($row['unload_type'] ?? 'OO')));
         if ($unloadType !== 'SKLAD') {
             $unloadType = 'OO';
@@ -241,12 +245,21 @@ try {
         }
     }
 
+    $selectionRequestInfo = [];
+    foreach ((new FeoRepository($pdo))->getRouteInfoByZayavkaIds(array_values($allRequestIds)) as $requestId => $info) {
+        $selectionRequestInfo[$requestId] = [
+            'mass_netto' => (float)($info['mass_netto'] ?? 0),
+            'mass_brutto' => (float)($info['mass_brutto'] ?? 0),
+        ];
+    }
+
     safeJson([
         'success' => true,
         'routes' => $plannedRoutes,
         'found_routes' => $foundRoutes,
         'started_routes' => $startedRoutes,
         'manager_id' => $managerId > 0 ? $managerId : null,
+        'request_info' => $selectionRequestInfo,
     ]);
 } catch (Throwable $e) {
     mapError('get_planned_routes failed', ['error' => $e->getMessage()]);

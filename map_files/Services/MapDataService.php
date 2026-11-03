@@ -76,7 +76,10 @@ class MapDataService
             // Заявка, которую забирают со склада, физически уже не находится
             // на исходном адресе ОО. Складской маркер показывает её остаток,
             // поэтому отдельный FEO-маркер по старым координатам не создаём.
-            if ($inFlight && (int)($flightStatuses[$point['zayavka_id']]['source_warehouse_id'] ?? 0) > 0) {
+            // В смешанном рейсе это относится только к складской части:
+            // прямые заявки ОО сохраняют свои точки.
+            if ($inFlight && (int)($flightStatuses[$point['zayavka_id']]['source_warehouse_id'] ?? 0) > 0
+                && empty($flightStatuses[$point['zayavka_id']]['is_direct_request'])) {
                 continue;
             }
 
@@ -327,6 +330,15 @@ class MapDataService
             }
             $status = $row['status'] ?? null;
             $flightId = $row['id'] ?? null;
+            $directIds = [];
+            if (($row['route_type'] ?? '') === 'mixed_to_utilizer') {
+                foreach (explode(',', (string)($row['direct_zayavki_ids'] ?? '')) as $directId) {
+                    $directId = trim($directId);
+                    if ($directId !== '') {
+                        $directIds[$directId] = true;
+                    }
+                }
+            }
             foreach (explode(',', (string)($row['zayavki_ids'] ?? '')) as $id) {
                 $id = trim($id);
                 if ($id === '') {
@@ -338,6 +350,7 @@ class MapDataService
                         'color' => $this->statusColors[$status] ?? '#000',
                         'flight_id' => $flightId,
                         'source_warehouse_id' => (int)($row['source_warehouse_id'] ?? 0),
+                        'is_direct_request' => isset($directIds[$id]),
                     ];
                     $processed[$id] = true;
                 }

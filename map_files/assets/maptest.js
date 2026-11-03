@@ -140,6 +140,7 @@ function uiText(key, fallback) {
 const initialTrackers = Array.isArray(mapBootstrap.initialTrackers) ? mapBootstrap.initialTrackers : [];
 const allTrackers = Array.isArray(mapBootstrap.allTrackers) ? mapBootstrap.allTrackers : [];
 const routeCardsMeta = (mapBootstrap.routeCardsMeta && typeof mapBootstrap.routeCardsMeta === 'object') ? mapBootstrap.routeCardsMeta : {};
+const requestInfoById = { ...(mapBootstrap.requestInfoById || {}) };
 const foundRoutesData = Array.isArray(mapBootstrap.foundRoutesData) ? mapBootstrap.foundRoutesData : [];
 const massBasis = mapBootstrap.massBasis === 'mass_brutto' ? 'mass_brutto' : 'mass_netto';
 const isGrossMassView = massBasis === 'mass_brutto';
@@ -1012,7 +1013,10 @@ function updateSelectionUI() {
     let uniqueAddresses = new Set();
     
     selectedOrder.forEach(id => {
-        const w = weightById[id] || 0;
+        // Saved composition includes warehouse and pending inbound requests
+        // whose former OO points are intentionally absent from the map.
+        const requestInfo = requestInfoById[id];
+        const w = requestInfo ? Math.round(getPointDisplayMass(requestInfo) * 1000) : (weightById[id] || 0);
         totalW += w;
         groupsData.forEach(g => g.points.forEach(p => {
             if (String(p.zayavka_id) === String(id) && p.mno_adres_pogruzki) uniqueAddresses.add(p.mno_adres_pogruzki);
@@ -3280,6 +3284,10 @@ function loadPlannedRoutes() {
     if (isGrossMassView) routeQuery.set('mass_basis', 'brutto');
     const routeQueryString = routeQuery.toString();
     return fetch(`map_files/get_planned_routes.php${routeQueryString ? `?${routeQueryString}` : ''}`).then(r => r.json()).then(data => {
+        if (data && data.success && data.request_info) {
+            Object.assign(requestInfoById, data.request_info);
+            if (selectedOrder.length) updateSelectionUI();
+        }
         if (data && Array.isArray(data.routes)) {
             data.routes.forEach((route) => {
                 if (!route || route.id === undefined || route.id === null) return;
