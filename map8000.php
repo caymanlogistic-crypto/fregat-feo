@@ -75,7 +75,6 @@ $jsVersion = (int)(@filemtime(__DIR__ . '/map8000_files/assets/map8000.js') ?: t
             <label>Примечание<textarea id="route-notes" class="control" rows="2" maxlength="4000"></textarea></label>
 
             <div id="selection-summary" class="selection-summary">Заявки не выбраны</div>
-            <div id="selected-list" class="selected-list"></div>
             <div class="route-actions">
                 <button id="optimize-btn" class="btn btn-primary" type="button">Рассчитать расстояние</button>
                 <button id="save-route-btn" class="btn btn-success" type="button">Сохранить рейс</button>
