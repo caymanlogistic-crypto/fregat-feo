@@ -1107,7 +1107,7 @@ style="width: 100%;"
 </div>
 </div>
 <div class="table-wrapper">
-<table class="data-table" id="flightsTable">
+<table class="data-table" id="flightsTable" style="min-width: 2000px;">
 <thead>
 <tr>
 <th style="width: 30px;"></th>
