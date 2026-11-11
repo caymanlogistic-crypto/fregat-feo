@@ -72,7 +72,7 @@ function flightRouteLabel(array $flight) {
             : 'generator_to_utilizer';
     }
     $labels = [
-        'generator_to_utilizer' => 'ОО → Утилизатор',
+        'generator_to_utilizer' => '',
         'generator_to_warehouse' => 'ОО → Временный склад',
         'warehouse_to_warehouse' => 'Склад → Склад',
         'warehouse_to_utilizer' => 'Склад → Утилизатор',
@@ -1146,12 +1146,15 @@ $managerLabel = trim((string)($flight['manager_name'] ?? ''));
 </small>
 </td>
 <td style="text-align: center;">
-<div><?= htmlspecialchars(flightRouteLabel($flight), ENT_QUOTES, 'UTF-8') ?></div>
+<?php $routeLabel = flightRouteLabel($flight); ?>
+<?php if ($routeLabel !== ''): ?>
+<div><?= htmlspecialchars($routeLabel, ENT_QUOTES, 'UTF-8') ?></div>
 <?php $warehouseLabel = flightWarehouseLabel($flight); ?>
 <?php if ($warehouseLabel !== ''): ?>
 <div style="white-space: normal;"><?= htmlspecialchars($warehouseLabel, ENT_QUOTES, 'UTF-8') ?></div>
 <?php else: ?>
 <div style="color:#999;">—</div>
+<?php endif; ?>
 <?php endif; ?>
 </td>
 <td style="text-align: center;">
