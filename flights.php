@@ -64,6 +64,23 @@ function getFlightsWarehouseNameColumn(PDO $pdo) {
     return $column;
 }
 
+function flightRouteLabel(array $flight) {
+    $routeType = strtolower(trim((string)($flight['route_type'] ?? '')));
+    if ($routeType === '') {
+        $routeType = strtoupper(trim((string)($flight['unload_type'] ?? 'OO'))) === 'SKLAD'
+            ? 'generator_to_warehouse'
+            : 'generator_to_utilizer';
+    }
+    $labels = [
+        'generator_to_utilizer' => 'ОО → Утилизатор',
+        'generator_to_warehouse' => 'ОО → Временный склад',
+        'warehouse_to_warehouse' => 'Склад → Склад',
+        'warehouse_to_utilizer' => 'Склад → Утилизатор',
+        'mixed_to_utilizer' => 'ОО + Склад → Утилизатор',
+    ];
+    return $labels[$routeType] ?? 'Маршрут не указан';
+}
+
 function flightWarehouseLabel(array $flight) {
     $routeType = strtolower(trim((string)($flight['route_type'] ?? '')));
     $sourceName = trim((string)($flight['source_warehouse_name'] ?? ''));
@@ -1096,7 +1113,7 @@ style="width: 100%;"
 <th style="width: 30px;"></th>
 <th style="width: 50px;">ID</th>
 <th style="width: 200px;">ОПИСАНИЕ РЕЙСА</th>
-<th style="width: 140px; text-align: center;">СКЛАД</th>
+<th style="width: 200px; text-align: center;">СКЛАД</th>
 <th style="text-align: center;">СТАТУС</th>
 <th style="text-align: center;">ПОДРЯД. / ВОД.</th>
 <th style="text-align: center;">МЕНЕДЖЕР</th>
@@ -1129,13 +1146,12 @@ $managerLabel = trim((string)($flight['manager_name'] ?? ''));
 </small>
 </td>
 <td style="text-align: center;">
+<div><?= htmlspecialchars(flightRouteLabel($flight), ENT_QUOTES, 'UTF-8') ?></div>
 <?php $warehouseLabel = flightWarehouseLabel($flight); ?>
 <?php if ($warehouseLabel !== ''): ?>
-СКЛАД: <?= htmlspecialchars($warehouseLabel, ENT_QUOTES, 'UTF-8') ?>
-<?php elseif ($flight['unload_type'] === 'SKLAD'): ?>
-СКЛАД
+<div style="white-space: normal;"><?= htmlspecialchars($warehouseLabel, ENT_QUOTES, 'UTF-8') ?></div>
 <?php else: ?>
-<span style="color:#999;">—</span>
+<div style="color:#999;">—</div>
 <?php endif; ?>
 </td>
 <td style="text-align: center;">
